@@ -1,6 +1,6 @@
 /*************************************************************
  ** Copyright (C), 2012-2016, OPPO Mobile Comm Corp., Ltd
- ** CONFIG_MACH_OPPO
+ ** VENDOR_EDIT
  ** File        : gt9xx.c
  ** Description :
  ** Date        : 2015-04-21 17:07
@@ -61,13 +61,6 @@
 
 #include "gt9xx.h"
 
-#if 0 /* delete it by lauson. */
-/*[BUGFIX]Add Begin by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-#define GOODIX_PINCTRL_STATE_SLEEP "gt9xx_int_suspend"
-#define GOODIX_PINCTRL_STATE_DEFAULT "gt9xx_int_default"
-/*[BUGFIX]Add End by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-#endif
-
 //static const char *goodix_ts_name = "goodix-ts";
 static struct workqueue_struct *goodix_wq;
 struct i2c_client * i2c_connect_client = NULL;
@@ -77,12 +70,6 @@ u8 config[GTP_CONFIG_MAX_LENGTH + GTP_ADDR_LENGTH]
 #if GTP_HAVE_TOUCH_KEY
 static const u16 touch_key_array[] = GTP_KEY_TAB;
 #define GTP_MAX_KEY_NUM  (sizeof(touch_key_array)/sizeof(touch_key_array[0]))
-
-#if 0 //#if GTP_DEBUG_ON
-static const int  key_codes[] = {KEY_HOME, KEY_BACK, KEY_MENU, KEY_SEARCH};
-static const char *key_names[] = {"Key_Home", "Key_Back", "Key_Menu", "Key_Search"};
-#endif
-
 #endif
 
 #define TPD_DEVICE "goodix-ts"
@@ -120,7 +107,6 @@ static atomic_t double_enable;
 //static int is_gesture_enable = 0;
 static uint32_t gesture;
 
-
 #define DTAP_DETECT          0xCC
 #define UP_VEE_DETECT        0x76
 #define DOWN_VEE_DETECT      0x5e
@@ -134,8 +120,6 @@ static uint32_t gesture;
 #define UP_SLIDE_DETECT      0xBA
 #define M_DETECT             0x6D
 #define W_DETECT             0x77
-
-
 
 
 #define UnkownGestrue       0
@@ -152,7 +136,6 @@ static uint32_t gesture;
 #define Down2UpSwip         11  // |^
 #define Mgestrue            12  // M
 #define Wgestrue            13  // W
-
 #endif
 
 #ifdef GT9XX_SUPPORT_REPORT_COORDINATE
@@ -176,9 +159,6 @@ static uint32_t clockwise;
 
 
 static struct proc_dir_entry *prEntry_tp = NULL;
-#ifdef GT9XX_SUPPORT_GLOVES_MODE
-static struct proc_dir_entry *prEntry_glove_mode = NULL;
-#endif
 #ifdef GT9XX_SUPPORT_GESTURE
 static struct proc_dir_entry *prEntry_coodinate  = NULL;
 static struct proc_dir_entry *prEntry_double_tap = NULL;
@@ -540,6 +520,8 @@ static int  gtp_get_sensor_id(int TP_ID1, int TP_ID2, int TP_ID3, struct goodix_
         }
     }
 
+
+
     if (is_project(OPPO_15109))
     {
         switch(sensor_id)
@@ -554,6 +536,8 @@ static int  gtp_get_sensor_id(int TP_ID1, int TP_ID2, int TP_ID3, struct goodix_
                 break;
         }
     }
+
+
 
     pr_err("%s update_path:%s \n", __func__, gt9xx_updata_file_path);
     return 0;
@@ -964,49 +948,8 @@ static void goodix_ts_work_func(struct work_struct *work)
 
                     case CIRCLE_DETECT  :
                         gesture =  Circle;
-#if 0
-                        j = 0;
-                        for (i = 0; i < length; i++)
-                        {
-                            Point_input[i].x = coordinate_single[j + 2]  |  (coordinate_single[j + 3] << 8);
-                            Point_input[i].y = coordinate_single[j + 3] |  (coordinate_single[j + 4] << 8);
-                            j = j + 4;
-                            GTP_INFO("Point_input[%d].x = %d,Point_input[%d].y = %d\n", i, Point_input[i].x, i, Point_input[i].y)   ;
-                        }
-                        clock = cross(Point_input[0], Point_input[1], Point_input[2]);
-                        GetCirclePoints(&Point_input[0], length, Point_output);
-                        Point_start.x = Point_input[0].x;
-                        Point_start.y = Point_input[0].y;
-                        Point_end.x = Point_input[length - 1].x;
-                        Point_end.y = Point_input[length - 1].y;
-                        Point_1st.x = Point_output[0].x;
-                        Point_1st.y = Point_output[0].y;
-                        Point_2nd.x = Point_output[1].x;
-                        Point_2nd.y = Point_output[1].y;
-                        Point_3rd.x = Point_output[2].x;
-                        Point_3rd.y = Point_output[2].y;
-                        Point_4th.x = Point_output[3].x;
-                        Point_4th.y = Point_output[3].y;
-                        if (clock > 0)
-                        {
-                            clockwise = 1;
-                        }
-                        else
-                        {
-                            clockwise = 0;
-                        }
-#endif
-#if 1
                         {
                             int j = 2;
-                            //for (i = 2; i < (length * 4 + 2); i++)
-                            //{
-                                //coordinate_single[i] = 0;
-                            //}
-                            //ret = gtp_i2c_read(i2c_connect_client, coordinate_size, 3);
-                            //length = coordinate_size[2];
-                            //GTP_ERROR("coordinate_size[2] = %d\n ", coordinate_size[2]);
-                            //ret = gtp_i2c_read(i2c_connect_client, coordinate_single, coordinate_size[2] * 4 + 2);
                             for (i = 2; i < (length + 2); i++)
                             {
                                 Point_input[i].x = coordinate_single[j]  |  (coordinate_single[j + 1] << 8);
@@ -1036,20 +979,6 @@ static void goodix_ts_work_func(struct work_struct *work)
                         {
                             printk("Point_output[%d].x = %d,Point_output[%d].y = %d\n", i, Point_output[i].x, i, Point_output[i].y);
                         }
-#else
-                        Point_start.x = 0;
-                        Point_start.y = 0;
-                        Point_end.x = 0;
-                        Point_end.y = 0;
-                        Point_1st.x = 0;
-                        Point_1st.y = 0;
-                        Point_2nd.x = 0;
-                        Point_2nd.y = 0;
-                        Point_3rd.x = 0;
-                        Point_3rd.y = 0;
-                        Point_4th.x = 0;
-                        Point_4th.y = 0;
-#endif
                         break;
 
                     case DOUSWIP_DETECT  :
@@ -1433,16 +1362,6 @@ static void goodix_ts_work_func(struct work_struct *work)
         {
             for (i = 0; i < GTP_MAX_KEY_NUM; i++)
             {
-#if 0 //#if GTP_DEBUG_ON
-                for (ret = 0; ret < 4; ++ret)
-                {
-                    if (key_codes[ret] == touch_key_array[i])
-                    {
-                        GTP_DEBUG("Key: %s %s", key_names[ret], (key_value & (0x01 << i)) ? "Down" : "Up \n");
-                        break;
-                    }
-                }
-#endif
                 input_report_key(ts->input_dev, touch_key_array[i], key_value & (0x01 << i));
             }
             touch_num = 0;  // shield fingers
@@ -1683,7 +1602,6 @@ Input:
 Output:
     None.
 *******************************************************/
-#if 1
 void gtp_reset_guitar(struct i2c_client *client, s32 ms)
 {
     struct goodix_ts_data *ts = i2c_get_clientdata(client);
@@ -1720,40 +1638,6 @@ void gtp_reset_guitar(struct i2c_client *client, s32 ms)
 
     mutex_unlock(&ts->rst_lock);
 }
-#else
-void gtp_reset_guitar(struct i2c_client *client, s32 ms)
-{
-#if GTP_COMPATIBLE_MODE
-    struct goodix_ts_data *ts = i2c_get_clientdata(client);
-#endif
-
-    GTP_DEBUG_FUNC();
-    pr_err("Guitar reset\n");
-    GTP_GPIO_OUTPUT(GTP_RST_PORT, 0);   // begin select I2C slave addr
-    msleep(ms);                         // T2: > 10ms
-    // HIGH: 0x28/0x29, LOW: 0xBA/0xBB
-    GTP_GPIO_OUTPUT(ts->pdata->irq_gpio, client->addr == 0x14);
-
-    msleep(2);                          // T3: > 100us
-    GTP_GPIO_OUTPUT(GTP_RST_PORT, 1);
-
-    msleep(6);                          // T4: > 5ms
-
-    GTP_GPIO_AS_INPUT(GTP_RST_PORT);    // end select I2C slave addr
-
-#if GTP_COMPATIBLE_MODE
-    if (CHIP_TYPE_GT9F == ts->chip_type)
-    {
-        return;
-    }
-#endif
-
-    gtp_int_sync(ts, 50);
-#if GTP_ESD_PROTECT
-    gtp_init_ext_watchdog(client);
-#endif
-}
-#endif
 
 #if defined(CONFIG_HAS_EARLYSUSPEND) || defined(CONFIG_FB)
 /*******************************************************
@@ -1982,44 +1866,6 @@ static s8 gtp_wakeup_sleep(struct goodix_ts_data * ts)
     return ret;
 }
 #if GTP_DRIVER_SEND_CFG
-#if 0 /* delete it by lauson. */
-static s32 gtp_get_info(struct goodix_ts_data *ts)
-{
-    u8 opr_buf[6] = {0};
-    s32 ret = 0;
-
-    ts->abs_x_max = GTP_MAX_WIDTH;
-    ts->abs_y_max = GTP_MAX_HEIGHT;
-    ts->int_trigger_type = GTP_INT_TRIGGER;
-
-    opr_buf[0] = (u8)((GTP_REG_CONFIG_DATA + 1) >> 8);
-    opr_buf[1] = (u8)((GTP_REG_CONFIG_DATA + 1) & 0xFF);
-
-    ret = gtp_i2c_read(ts->client, opr_buf, 6);
-    if (ret < 0)
-    {
-        return FAIL;
-    }
-
-    ts->abs_x_max = (opr_buf[3] << 8) + opr_buf[2];
-    ts->abs_y_max = (opr_buf[5] << 8) + opr_buf[4];
-
-    opr_buf[0] = (u8)((GTP_REG_CONFIG_DATA + 6) >> 8);
-    opr_buf[1] = (u8)((GTP_REG_CONFIG_DATA + 6) & 0xFF);
-
-    ret = gtp_i2c_read(ts->client, opr_buf, 3);
-    if (ret < 0)
-    {
-        return FAIL;
-    }
-    ts->int_trigger_type = opr_buf[2] & 0x03;
-
-    pr_err("X_MAX = %d, Y_MAX = %d, TRIGGER = 0x%02x",
-           ts->abs_x_max, ts->abs_y_max, ts->int_trigger_type);
-
-    return SUCCESS;
-}
-#endif
 #endif
 
 /*******************************************************
@@ -2657,20 +2503,6 @@ static ssize_t tp_glove_check_read_func(struct file *file, char __user *user_buf
     return ret;
 }
 
-#if 0 /* delete it by lauson. */
-static int tp_glove_check_write_func(struct file *file, const char *buffer, unsigned long count, void *data)
-{
-    /*
-     int len = 0;
-    glove_check =1;
-    printk("glove check is: %d\n", glove_check);
-    len = sprintf(page, "%d\n", atomic_read(&glove_check));
-
-    return len;
-    */
-}
-#endif
-
 #endif
 
 #ifdef GT9XX_SUPPORT_GESTURE
@@ -2922,12 +2754,6 @@ static int gtp_check_product_id(struct i2c_client *client)
 
     dev_err(&client->dev, "Goodix Product ID = %s\n", product_id);
 
-#if 0 /* delete it by lauson. */
-    ret = strcmp(product_id, ts->pdata->product_id);
-    if (ret != 0)
-        return -EINVAL;
-#endif
-
     return 0;
 }
 
@@ -2970,7 +2796,6 @@ Output:
     Executive outcomes.
         >= 0: succeed, < 0: failed
 *******************************************************/
-#if 1
 static int gtp_request_io_port(struct goodix_ts_data *ts)
 {
     struct i2c_client *client = ts->client;
@@ -3055,44 +2880,7 @@ err_free_irq_gpio:
 err_pwr_off:
     return ret;
 }
-#else
-static s8 gtp_request_io_port(struct goodix_ts_data *ts)
-{
-    s32 ret = 0;
 
-    GTP_DEBUG_FUNC();
-    ret = GTP_GPIO_REQUEST(GTP_INT_PORT, "GTP_INT_IRQ");
-    if (ret < 0)
-    {
-        GTP_ERROR("Failed to request GPIO:%d, ERRNO:%d\n", (s32)GTP_INT_PORT, ret);
-        ret = -ENODEV;
-    }
-    else
-    {
-        GTP_GPIO_AS_INT(GTP_INT_PORT);
-        ts->client->irq = GTP_INT_IRQ;
-    }
-
-    ret = GTP_GPIO_REQUEST(GTP_RST_PORT, "GTP_RST_PORT");
-    if (ret < 0)
-    {
-        GTP_ERROR("Failed to request GPIO:%d, ERRNO:%d\n", (s32)GTP_RST_PORT, ret);
-        ret = -ENODEV;
-    }
-
-    GTP_GPIO_AS_INPUT(GTP_RST_PORT);
-
-    gtp_reset_guitar(ts->client, 20);
-
-    if (ret < 0)
-    {
-        GTP_GPIO_FREE(GTP_RST_PORT);
-        GTP_GPIO_FREE(GTP_INT_PORT);
-    }
-
-    return ret;
-}
-#endif
 /*******************************************************
 Function:
     Request interrupt.
@@ -3677,15 +3465,6 @@ static int goodix_power_init(struct goodix_ts_data *ts)
 {
     int ret;
 
-#if 0
-    ts->avdd = regulator_get(&ts->client->dev, "avdd");
-    if (IS_ERR(ts->avdd))
-    {
-        ret = PTR_ERR(ts->avdd);
-        dev_info(&ts->client->dev,
-                 "Regulator get failed avdd ret=%d\n", ret);
-    }
-#endif
     ts->vdd = regulator_get(&ts->client->dev, "vdd");
     if (IS_ERR(ts->vdd))
     {
@@ -3719,26 +3498,7 @@ static int goodix_power_on(struct goodix_ts_data *ts)
         dev_info(&ts->client->dev, "Device already power on\n");
         return 0;
     }
-#if 0
-    if (!IS_ERR(ts->avdd))
-    {
-        ret = reg_set_optimum_mode_check(ts->avdd,
-                                         GOODIX_VDD_LOAD_MAX_UA);
-        if (ret < 0)
-        {
-            dev_err(&ts->client->dev,
-                    "Regulator avdd set_opt failed rc=%d\n", ret);
-            goto err_set_opt_avdd;
-        }
-        ret = regulator_enable(ts->avdd);
-        if (ret)
-        {
-            dev_err(&ts->client->dev,
-                    "Regulator avdd enable failed ret=%d\n", ret);
-            goto err_enable_avdd;
-        }
-    }
-#endif
+
     if (!IS_ERR(ts->vdd))
     {
         ret = regulator_set_voltage(ts->vdd, GOODIX_VTG_MIN_UV,
@@ -3812,73 +3572,9 @@ err_set_opt_vdd:
     if (!IS_ERR(ts->vdd))
         regulator_set_voltage(ts->vdd, 0, GOODIX_VTG_MAX_UV);
 err_set_vtg_vdd:
-#if 0
-    if (!IS_ERR(ts->avdd))
-        regulator_disable(ts->avdd);
-err_enable_avdd:
-err_set_opt_avdd:
-#endif
     ts->power_on = false;
     return ret;
 }
-
-/**
- * goodix_power_off - Turn device power OFF
- * @ts: driver private data
- *
- * Returns zero on success, else an error.
- */
-#if 0
-static int goodix_power_off(struct goodix_ts_data *ts)
-{
-    int ret;
-
-    if (!ts->power_on)
-    {
-        dev_info(&ts->client->dev,
-                 "Device already power off\n");
-        return 0;
-    }
-
-    if (!IS_ERR(ts->vcc_i2c))
-    {
-        ret = regulator_set_voltage(ts->vcc_i2c, 0,
-                                    GOODIX_I2C_VTG_MAX_UV);
-        if (ret < 0)
-            dev_err(&ts->client->dev,
-                    "Regulator vcc_i2c set_vtg failed ret=%d\n",
-                    ret);
-        ret = regulator_disable(ts->vcc_i2c);
-        if (ret)
-            dev_err(&ts->client->dev,
-                    "Regulator vcc_i2c disable failed ret=%d\n",
-                    ret);
-    }
-
-    if (!IS_ERR(ts->vdd))
-    {
-        ret = regulator_set_voltage(ts->vdd, 0, GOODIX_VTG_MAX_UV);
-        if (ret < 0)
-            dev_err(&ts->client->dev,
-                    "Regulator vdd set_vtg failed ret=%d\n", ret);
-        ret = regulator_disable(ts->vdd);
-        if (ret)
-            dev_err(&ts->client->dev,
-                    "Regulator vdd disable failed ret=%d\n", ret);
-    }
-#if 0
-    if (!IS_ERR(ts->avdd))
-    {
-        ret = regulator_disable(ts->avdd);
-        if (ret)
-            dev_err(&ts->client->dev,
-                    "Regulator avdd disable failed ret=%d\n", ret);
-    }
-#endif
-    ts->power_on = false;
-    return 0;
-}
-#endif
 
 static int goodix_ts_get_dt_coords(struct device *dev, char *name,
                                    struct goodix_ts_platform_data *pdata)
@@ -3928,8 +3624,6 @@ static int goodix_ts_get_dt_coords(struct device *dev, char *name,
 
     return 0;
 }
-
-
 
 static int goodix_parse_dt(struct device *dev,
                            struct goodix_ts_platform_data *pdata)
@@ -4073,51 +3767,6 @@ static int goodix_parse_dt(struct device *dev,
     return 0;
 }
 
-#if 0 /* delete it by lauson. */
-/*[BUGFIX]Add Begin by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-struct gtp_pinctrl_info
-{
-    struct pinctrl *pinctrl;
-    struct pinctrl_state *gpio_state_active;
-    struct pinctrl_state *gpio_state_suspend;
-};
-
-static struct gtp_pinctrl_info gt9xx_pctrl;
-static int gtp_pinctrl_init(struct device *dev)
-{
-    gt9xx_pctrl.pinctrl = devm_pinctrl_get(dev);
-
-    if (IS_ERR_OR_NULL(gt9xx_pctrl.pinctrl))
-    {
-        pr_err("%s:%d Getting pinctrl handle failed\n",
-               __func__, __LINE__);
-        return -EINVAL;
-    }
-    gt9xx_pctrl.gpio_state_active = pinctrl_lookup_state(
-                                        gt9xx_pctrl.pinctrl,
-                                        GOODIX_PINCTRL_STATE_DEFAULT);
-
-    if (IS_ERR_OR_NULL(gt9xx_pctrl.gpio_state_active))
-    {
-        pr_err("%s:%d Failed to get the active state pinctrl handle\n",
-               __func__, __LINE__);
-        return -EINVAL;
-    }
-    gt9xx_pctrl.gpio_state_suspend = pinctrl_lookup_state(
-                                         gt9xx_pctrl.pinctrl,
-                                         GOODIX_PINCTRL_STATE_SLEEP);
-
-    if (IS_ERR_OR_NULL(gt9xx_pctrl.gpio_state_suspend))
-    {
-        pr_err("%s:%d Failed to get the suspend state pinctrl handle\n",
-               __func__, __LINE__);
-        return -EINVAL;
-    }
-    return 0;
-}
-/*[BUGFIX]Add End by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-#endif
-
 static int gt9xx_free_fingers(struct goodix_ts_data *ts)
 {
 	int i = 0;
@@ -4227,14 +3876,6 @@ static int init_gt9xx_proc(void)
     }
 #endif
 
-#ifdef GT9XX_SUPPORT_GLOVES_MODE
-    prEntry_glove_mode = proc_create( "glove_mode_enable", 0666, prEntry_tp, &glove_mode_enable_proc_fops);
-    if (prEntry_glove_mode == NULL)
-    {
-        ret = -ENOMEM;
-        printk(KERN_INFO"init_gt9xx_proc: Couldn't create proc entry\n");
-    }
-#endif
 #ifdef GT9XX_SUPPORT_APK_AUTOTEST
     prEntry_glove_check = proc_create( "glove_mode_check", 0444, prEntry_tp, &glove_check_proc_fops);
     if (prEntry_glove_check == NULL)
@@ -4324,23 +3965,6 @@ static int goodix_ts_probe(struct i2c_client *client, const struct i2c_device_id
 
     memset(ts, 0, sizeof(*ts));
 
-#if 0
-    pr_err(">>-- %s line:%d \n", __func__, __LINE__);
-    ts->client = client;
-
-    ts->pdata = pdata;
-    i2c_set_clientdata(client, ts);
-    ret = gtp_request_io_port(ts);
-    if (ret < 0)
-    {
-        GTP_ERROR("GTP request IO port failed.\n");
-        kfree(ts);
-        return ret;
-    }
-
-    pr_err(">>-- %s line:%d \n", __func__, __LINE__);
-#endif
-
     INIT_WORK(&ts->work, goodix_ts_work_func);
     ts->client = client;
 
@@ -4371,16 +3995,6 @@ static int goodix_ts_probe(struct i2c_client *client, const struct i2c_device_id
         return ret;
     }
 
-#if 0 /* delete it by lauson. */
-    /*[BUGFIX]Add Begin by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-    gtp_pinctrl_init(client->dev)
-    ret = pinctrl_select_state(gt9xx_pctrl.pinctrl,
-                               gt9xx_pctrl.gpio_state_active);
-    if (ret)
-        pr_err("%s:%d cannot set pin to suspend state",
-               __func__, __LINE__);
-    /*[BUGFIX]Add End by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-#endif
     ret = goodix_power_init(ts);
     if (ret)
     {
@@ -4420,15 +4034,6 @@ static int goodix_ts_probe(struct i2c_client *client, const struct i2c_device_id
     }
 #endif
 
-#if 0
-    pr_err(">>-- %s line:%d \n", __func__, __LINE__);
-    ret = gtp_i2c_test(client);
-    pr_err(">>-- %s line:%d, ret=%d \n", __func__, __LINE__, ret);
-    if (ret < 0)
-    {
-        GTP_ERROR("I2C communication ERROR!");
-    }
-#endif
     ret = gtp_read_version(client, &version_info);
     if (ret < 0)
     {
@@ -4457,18 +4062,7 @@ static int goodix_ts_probe(struct i2c_client *client, const struct i2c_device_id
     }
 
 #if GTP_ESD_PROTECT
-//#if 0 /* delete it by lauson. */
     gtp_esd_switch(client, SWITCH_ON);
-//#endif
-#endif
-#if 0 /* delete it by lauson. */
-#if GTP_AUTO_UPDATE
-    ret = gup_init_update_proc(ts);
-    if (ret < 0)
-    {
-        GTP_ERROR("Create update thread error.\n");
-    }
-#endif
 #endif
     ret = gtp_request_input_dev(ts);
     if (ret < 0)
@@ -4608,15 +4202,6 @@ static int goodix_ts_suspend(struct device *dev)
     int ret = 0, i;
     pr_err("%s enter \n", __func__);
 
-#if 0 /* delete it by lauson. */
-    /*[BUGFIX]Add Begin by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-    ret = pinctrl_select_state(gt9xx_pctrl.pinctrl,
-                               gt9xx_pctrl.gpio_state_suspend);
-    if (ret)
-        pr_err("%s:%d cannot set pin to suspend state",
-               __func__, __LINE__);
-    /*[BUGFIX]Add End by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-#endif
     if (ts->gtp_is_suspend)
     {
         dev_dbg(&ts->client->dev, "Already in suspend state.\n");
@@ -4624,15 +4209,6 @@ static int goodix_ts_suspend(struct device *dev)
     }
 
    mutex_lock(&ts->io_lock);
-#if 0
-    if (ts->fw_loading)
-    {
-        dev_info(&ts->client->dev,
-                 "Fw upgrade in progress, can't go to suspend.\n");
-//      mutex_unlock(&ts->lock);
-        return 0;
-    }
-#endif
 
 #if GTP_ESD_PROTECT
     gtp_esd_switch(ts->client, SWITCH_OFF);
@@ -4709,16 +4285,6 @@ static void speedup_goodix_resume(struct work_struct *work)
     pr_err("%s enter.  cur_mode:%d \n", __func__, ts->gtp_rawdiff_mode);
 
     gt9xx_free_fingers(ts);
-
-#if 0 /* delete it by lauson. */
-    /*[BUGFIX]Add Begin by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-    ret = pinctrl_select_state(gt9xx_pctrl.pinctrl,
-                               gt9xx_pctrl.gpio_state_active);
-    if (ret)
-        pr_err("%s:%d cannot set pin to suspend state",
-               __func__, __LINE__);
-    /*[BUGFIX]Add End by TCTSZ-LZ 2014-5-5,PR-667466. TP INT pull-up enable.*/
-#endif
 
     mutex_lock(&ts->io_lock);
     ts->gtp_rawdiff_mode = false;   //force diff mode  exit.
@@ -5493,7 +5059,6 @@ static int __init goodix_ts_init(void)
     s32 ret;
 
     GTP_DEBUG_FUNC();
-#if 1
     if (1)
     {
         pr_err("GTP driver installing...\n");
@@ -5508,7 +5073,6 @@ static int __init goodix_ts_init(void)
         gtp_esd_check_workqueue = create_workqueue("gtp_esd_check");
 #endif
     }
-#endif
     ret = i2c_add_driver(&goodix_ts_driver);
 
     return ret;

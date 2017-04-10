@@ -83,33 +83,8 @@ s8 IC_TYPE[16] = "GT9XX";
 
 static void tool_set_proc_name(char * procname)
 {
-#if 0
-    char *months[12] = {"Jan", "Feb", "Mar", "Apr", "May",
-        "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-    char date[20] = {0};
-    char month[4] = {0};
-    int i = 0, n_month = 1, n_day = 0, n_year = 0;
-
-    sprintf(date, "%s", __DATE__);
-
-    //GTP_DEBUG("compile date: %s", date);
-
-    sscanf(date, "%s %d %d", month, &n_day, &n_year);
-
-    for (i = 0; i < 12; ++i)
-    {
-        if (!memcmp(months[i], month, 3))
-        {
-            n_month = i+1;
-            break;
-        }
-    }
-
-    sprintf(procname, "gmnode%04d%02d%02d", n_year, n_month, n_day);
-#else
     sprintf(procname, "goodix_tool");
     GTP_DEBUG("procname = %s", procname);
-#endif
 }
 
 #define IIC_MAX_TRANSFER_SIZE    200
@@ -264,10 +239,6 @@ static s32 tool_i2c_write_with_extra(u8* buf, u16 len)
 
 static void register_i2c_func(void)
 {
-//    if (!strncmp(IC_TYPE, "GT818", 5) || !strncmp(IC_TYPE, "GT816", 5)
-//        || !strncmp(IC_TYPE, "GT811", 5) || !strncmp(IC_TYPE, "GT818F", 6)
-//        || !strncmp(IC_TYPE, "GT827", 5) || !strncmp(IC_TYPE,"GT828", 5)
-//        || !strncmp(IC_TYPE, "GT813", 5))
     if (strncmp(IC_TYPE, "GT8110", 6) && strncmp(IC_TYPE, "GT8105", 6)
         && strncmp(IC_TYPE, "GT801", 5) && strncmp(IC_TYPE, "GT800", 5)
         && strncmp(IC_TYPE, "GT801PLUS", 9) && strncmp(IC_TYPE, "GT811", 5)
@@ -465,17 +436,6 @@ ssize_t goodix_tool_write(struct file *filp, const char __user *buff, size_t len
         return -EPERM;
     }
 
-
-#if 0 /* delete it by lauson. */
-    GTP_DEBUG("[Operation]wr: %02X", cmd_head.wr);
-    GTP_DEBUG("[Flag]flag: %02X, addr: %02X%02X, value: %02X, relation: %02X", cmd_head.flag, cmd_head.flag_addr[0],
-                        cmd_head.flag_addr[1], cmd_head.flag_val, cmd_head.flag_relation);
-    GTP_DEBUG("[Retry]circle: %d, times: %d, retry: %d, delay: %d", (s32)cmd_head.circle, (s32)cmd_head.times,
-                        (s32)cmd_head.retry, (s32)cmd_head.delay);
-    GTP_DEBUG("[Data]data len: %d, addr len: %d, addr: %02X%02X, buffer len: %d, data[0]: %02X", (s32)cmd_head.data_len,
-                        (s32)cmd_head.addr_len, cmd_head.addr[0], cmd_head.addr[1], (s32)len, buff[CMD_HEAD_LENGTH]);
-#endif
-
     if (1 == cmd_head.wr)
     {
         ret = copy_from_user(&cmd_head.data[GTP_ADDR_LENGTH], &buff[CMD_HEAD_LENGTH], cmd_head.data_len);
@@ -651,11 +611,6 @@ ssize_t goodix_tool_read(struct file *file, char __user *page, size_t size, loff
         }
 
         memcpy(cmd_head.data, cmd_head.addr, cmd_head.addr_len);
-
-#if 0 /* delete it by lauson. */
-        GTP_DEBUG("[CMD HEAD DATA] ADDR:0x%02x%02x.", cmd_head.data[0], cmd_head.data[1]);
-        GTP_DEBUG("[CMD HEAD ADDR] ADDR:0x%02x%02x.", cmd_head.addr[0], cmd_head.addr[1]);
-#endif
 
         if (cmd_head.delay)
         {

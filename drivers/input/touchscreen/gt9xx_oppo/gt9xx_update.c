@@ -1,6 +1,6 @@
 /*************************************************************
  ** Copyright (C), 2012-2016, OPPO Mobile Comm Corp., Ltd
- ** CONFIG_MACH_OPPO
+ ** VENDOR_EDIT
  ** File        : gt9xx_update.c
  ** Description :
  ** Date        : 2015-05-01 10:12
@@ -2636,22 +2636,8 @@ u8 gup_check_fs_mounted(char *path_name)
         return FAIL;
     }
 
-#if 1
     path_put(&path);
     return SUCCESS;
-#else
-    if (path.mnt->mnt_sb == root_path.mnt->mnt_sb)
-    {
-        //-- not mounted
-        path_put(&path);
-        return FAIL;
-    }
-    else
-    {
-        path_put(&path);
-        return SUCCESS;
-    }
-#endif
 }
 
 s32 i2c_write_bytes(struct i2c_client *client, u16 addr, u8 *buf, s32 len)
@@ -2962,16 +2948,6 @@ s32 gup_clk_calibration(void)
         gup_clk_dac_setting(i);
         gup_clk_count_init(1, CLK_AVG_TIME);
 
-    #if 0
-        gup_output_pulse(PULSE_LENGTH);
-        count = gup_clk_count_get();
-
-        if (count > PULSE_LENGTH * 60)//60= 60Mhz * 1us
-        {
-            break;
-        }
-
-    #else
         GTP_GPIO_OUTPUT(ts->pdata->irq_gpio, 0);
 
         //local_irq_save(flags);
@@ -3004,30 +2980,11 @@ s32 gup_clk_calibration(void)
             break;
         }
 
-    #endif
     }
 
     //clk_dac = i;
 
     gtp_reset_guitar(i2c_connect_client, 20);
-
-#if 0//for debug
-    //-- ouput clk to GPIO 4
-    buf = 0x00;
-    i2c_write_bytes(i2c_connect_client, 0x41FA, &buf, 1);
-    buf = 0x00;
-    i2c_write_bytes(i2c_connect_client, 0x4104, &buf, 1);
-    buf = 0x00;
-    i2c_write_bytes(i2c_connect_client, 0x4105, &buf, 1);
-    buf = 0x00;
-    i2c_write_bytes(i2c_connect_client, 0x4106, &buf, 1);
-    buf = 0x01;
-    i2c_write_bytes(i2c_connect_client, 0x4107, &buf, 1);
-    buf = 0x06;
-    i2c_write_bytes(i2c_connect_client, 0x41F8, &buf, 1);
-    buf = 0x02;
-    i2c_write_bytes(i2c_connect_client, 0x41F9, &buf, 1);
-#endif
 
     GTP_GPIO_AS_INT(ts->pdata->irq_gpio);
     return i;
