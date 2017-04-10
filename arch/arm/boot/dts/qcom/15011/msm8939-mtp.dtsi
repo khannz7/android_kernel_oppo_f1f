@@ -77,9 +77,9 @@
 					"switch1_sleep_switch3_sleep",
 					"switch1_act_switch2_sleep",
 					"switch1_sleep_switch2_act",
-					"clock_active", "clock_sleep",
-					"data_active", "data_sleep",
-					"reset_active", "reset_sleep";
+					"clock_active","clock_sleep",
+					"data_active","data_sleep",
+					"reset_active","reset_sleep";
 			pinctrl-0 = <&charging_switch1_active>;
 			pinctrl-1 = <&charging_switch1_sleep>;
 			pinctrl-2 = <&charging_switch1_active>;
@@ -99,7 +99,7 @@
 			qcom,charging_data-gpio = <&msm_gpio 109 0x00>;
 		};
 
-		pic16f_fastcg@25 {
+		pic16f_fastcg@25{
 			status = "okay";
 			compatible = "microchip,pic16f_fastcg";
 			reg = <0x25>;
@@ -179,7 +179,7 @@
 		tfa9890@36 {
 			compatible = "nxp,tfa9890";
 			reg = <0x36>;
-			gpios = <&msm_gpio 16 0x00>;
+			gpios = <&msm_gpio 16 0x00>;   /* RESET */
 			tfa_vdd-supply = <&pm8916_l6>;
 			nxp,tfa_max-vol-steps = <15>;
 		};
@@ -193,7 +193,6 @@
 
 			vcc_i2c_opcharger-supply = <&pm8916_l5>;
 			qcom,irq-gpio = <&msm_gpio 62 0x01>;
-
 			qcom,disable-apsd;
 			qcom,bms-psy-name = "bms";
 			qcom,charger-inhibit-disabled;
@@ -207,25 +206,21 @@
 			qcom,input-current-max-ma = <2000>;
 			qcom,float-voltage-mv = <4320>;
 
-			qcom,hot_bat_decidegc = <530>;
+			qcom,hot_bat_decidegc = <550>;
 			qcom,temp_hot_vfloat_mv = <4100>;
-			qcom,temp_hot_fastchg_current_ma = <900>;
+			qcom,temp_hot_fastchg_current_ma = <1050>;
 
 			qcom,warm_bat_decidegc = <450>;
 			qcom,temp_warm_vfloat_mv = <4320>;
 			qcom,temp_warm_fastchg_current_ma = <2000>;
 
-			qcom,pre_normal_bat_decidegc = <160>;
+			qcom,pre_normal_bat_decidegc = <150>;
 			qcom,temp_pre_normal_vfloat_mv = <4320>;
 			qcom,temp_pre_normal_fastchg_current_ma = <1050>;
 
-			qcom,pre_cool_bat_decidegc = <120>;
-			qcom,temp_pre_cool_vfloat_mv = <4320>;
-			qcom,temp_pre_cool_fastchg_current_ma = <500>;
-
-			qcom,pre_cool1_bat_decidegc = <50>;
-			qcom,temp_pre_cool1_vfloat_mv = <4320>;
-			qcom,temp_pre_cool1_fastchg_current_ma = <300>;
+			qcom,pre_cool_bat_decidegc = <100>;
+			qcom,temp_pre_cool_vfloat_mv = <4200>;
+			qcom,temp_pre_cool_fastchg_current_ma = <620>;
 
 			qcom,cool_bat_decidegc = <0>;
 			qcom,temp_cool_vfloat_mv = <4000>;
@@ -384,6 +379,7 @@
 
 &pm8916_bms {
 	status = "ok";
+	qcom,disable-bms;
 };
 
 &qcom_tzlog {
@@ -426,9 +422,16 @@
 	pinctrl-1 = <&mdss_dsi_suspend &mdss_te_suspend>;
 
 	qcom,dsi-pref-prim-pan = <&dsi_samsung_oppo15011_s6e3fa3_1080p_cmd>;
+	qcom,regulator-ldo-mode;
+	qcom,platform-regulator-settings = [00 01 01 00 20 07 00];
 
 	qcom,platform-enable-gpio = <&pm8916_gpios 3 0>;
 	qcom,platform-reset-gpio = <&msm_gpio 25 0>;
+};
+
+&mdss_dsi1 {
+	qcom,regulator-ldo-mode;
+	qcom,platform-regulator-settings = [00 01 01 00 20 07 00];
 };
 
 &pm8916_mpps {
@@ -507,4 +510,9 @@
 		     &qdsd_data3_jtag>;
 	pinctrl-5 = <&qdsd_clk_spmi &qdsd_cmd_spmi
 		     &qdsd_data0_spmi &qdsd_data3_spmi>;
+};
+
+&apc_vreg_corner {
+		qcom,cpr-up-threshold = <0>;
+		qcom,cpr-down-threshold = <8>;
 };
