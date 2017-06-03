@@ -54,6 +54,23 @@
 #include "mdss_fb.h"
 #include "mdss_mdp_splash_logo.h"
 #include "mdss_livedisplay.h"
+#include "mdss_mdp.h"
+
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/27  Add for 14045 LCD */
+#include <soc/oppo/oppo_project.h>
+#include "mdss_dsi.h"
+#include "mdss_mdp.h"
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/04/01  Add for 15009 lcd-backlight ctrl in factory mode START */
+#include <soc/oppo/boot_mode.h>
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+
+
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/03  Add for silence mode */
+int lcd_closebl_flag = 0;
+#endif /*CONFIG_MACH_15109*/
 
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MDSS_FB_NUM 3
@@ -681,6 +698,105 @@ static ssize_t mdss_fb_get_doze_mode(struct device *dev,
 
 	return scnprintf(buf, PAGE_SIZE, "%d\n", mfd->doze_mode);
 }
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/14  Add for ftm mode to shut down lcd */
+extern int lcd_dev;
+static ssize_t mdss_mdp_lcdoff_event(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct fb_info *fbi = dev_get_drvdata(dev);
+    struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)fbi->par;
+	   pr_err("%s YXQ mfd=0x%p\n", __func__, mfd);
+	if (!mfd)
+			return -ENODEV;
+#ifdef CONFIG_MACH_15109
+/* liuyan@Onlinerd.driver, 2014/10/14  Add for ftm sleep current too big */
+/* wuyu@EXP.BaseDrv.LCM, 2015-05-18, add micro OPPO_15011, (OPPO15011=OPPO_15018) */
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+/*chaoying.chen@EXP.BaseDrv.LCM,2015/07/14 modify  ftm for 15085 at sleep */
+/* wuyu@EXP.BaseDrv.LCM, 2015-07-21, lcm control failed at ftm mode */
+	   if(is_project(OPPO_15011) || is_project(OPPO_15018) || is_project(OPPO_15022) || is_project(OPPO_15085)){
+			return sprintf(buf,"mdss_fb_suspend_sub is called\n");
+	   }
+		if(is_project(OPPO_15037))
+		{
+			mdss_fb_suspend_sub(mfd);
+			return sprintf(buf,"mdss_fb_suspend_sub is called\n");
+	   }
+#endif /*CONFIG_CONFIG_MACH_15109*/
+	return mdss_fb_send_panel_event(mfd, MDSS_EVENT_PANEL_OFF, NULL);
+}
+extern void set_acl_mode(int level);
+static ssize_t mdss_set_low_power_mode(struct device *dev,
+                               struct device_attribute *attr,
+                               const char *buf, size_t count)
+{
+    int level = 0;
+    sscanf(buf, "%du", &level);
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if(is_project(14005) || is_project(OPPO_15011) || is_project(OPPO_15018) || is_project(OPPO_15022) || is_project(OPPO_15085))
+	set_acl_mode(level);
+    return count;
+}
+extern void set_hbm_mode(int level);
+static ssize_t mdss_set_hbm(struct device *dev,
+                               struct device_attribute *attr,
+                               const char *buf, size_t count)
+{
+    int level = 0;
+    sscanf(buf, "%du", &level);
+    set_hbm_mode(level);
+    return count;
+}
+#endif /*CONFIG_MACH_15109*/
+
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/05/19  Add for set cabc START */
+extern int set_cabc(int level);
+extern int cabc_mode;
+
+static ssize_t mdss_get_cabc(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	if(!(is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035)||is_project(OPPO_15109))){
+		return 0;
+	}
+	printk(KERN_INFO "get cabc mode = %d\n",cabc_mode);
+
+    return sprintf(buf, "%d\n", cabc_mode);
+}
+
+static ssize_t mdss_set_cabc(struct device *dev,
+                               struct device_attribute *attr,
+                               const char *buf, size_t count)
+{
+    int level = 0;
+    sscanf(buf, "%du", &level);
+    set_cabc(level);
+    return count;
+}
+/* YongPeng.Yi@SWDP.MultiMedia END */
+static ssize_t mdss_get_closebl_flag(struct device *dev,
+							struct device_attribute *attr, char *buf)
+{
+    printk(KERN_INFO "get closebl flag = %d\n",lcd_closebl_flag);
+    return sprintf(buf, "%d\n", lcd_closebl_flag);
+}
+
+static ssize_t mdss_set_closebl_flag(struct device *dev,
+                               struct device_attribute *attr,
+                               const char *buf, size_t count)
+{
+	int closebl = 0;
+	sscanf(buf, "%du", &closebl);
+	pr_err("lcd_closebl_flag = %d\n",closebl);
+	if(1 != closebl)
+		lcd_closebl_flag = 0;
+	pr_err("mdss_set_closebl_flag = %d\n",lcd_closebl_flag);
+    return count;
+}
+#endif /*CONFIG_MACH_15109*/
+
 
 static DEVICE_ATTR(msm_fb_type, S_IRUGO, mdss_fb_get_type, NULL);
 static DEVICE_ATTR(msm_fb_split, S_IRUGO | S_IWUSR, mdss_fb_show_split,
@@ -698,6 +814,20 @@ static DEVICE_ATTR(always_on, S_IRUGO | S_IWUSR | S_IWGRP,
 	mdss_fb_get_doze_mode, mdss_fb_set_doze_mode);
 static DEVICE_ATTR(msm_fb_panel_status, S_IRUGO,
 	mdss_fb_get_panel_status, NULL);
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/14  Add for ftm mode to shut down lcd */
+static DEVICE_ATTR(lcdoff, S_IRUGO, mdss_mdp_lcdoff_event, NULL);
+static DEVICE_ATTR(lpm, S_IRUGO|S_IWUSR, NULL, mdss_set_low_power_mode);
+static DEVICE_ATTR(hbm, S_IRUGO|S_IWUSR, NULL, mdss_set_hbm);
+// Also export hbm as sre, as this is what user space expects
+static DEVICE_ATTR(sre, S_IRUGO|S_IWUSR, NULL, mdss_set_hbm);
+#endif /*CONFIG_MACH_15109*/
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/05/19  Add for set cabc START */
+static DEVICE_ATTR(cabc, S_IRUGO|S_IWUSR, mdss_get_cabc, mdss_set_cabc);
+/* YongPeng.Yi@SWDP.MultiMedia END */
+static DEVICE_ATTR(closebl, 0664, mdss_get_closebl_flag, mdss_set_closebl_flag);
+#endif /*CONFIG_MACH_15109*/
 static struct attribute *mdss_fb_attrs[] = {
 	&dev_attr_msm_fb_type.attr,
 	&dev_attr_msm_fb_split.attr,
@@ -709,6 +839,15 @@ static struct attribute *mdss_fb_attrs[] = {
 	&dev_attr_msm_fb_thermal_level.attr,
 	&dev_attr_always_on.attr,
 	&dev_attr_msm_fb_panel_status.attr,
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/14  Add for ftm mode shut down lcd */
+	&dev_attr_lcdoff.attr,
+	&dev_attr_lpm.attr,
+	&dev_attr_hbm.attr,
+	&dev_attr_sre.attr,
+	&dev_attr_closebl.attr,
+	&dev_attr_cabc.attr,
+#endif /*CONFIG_MACH_15109*/
 	NULL,
 };
 
@@ -720,8 +859,16 @@ static int mdss_fb_create_sysfs(struct msm_fb_data_type *mfd)
 {
 	int rc;
 
+	if(!(is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035))) {
+		int i;
+		for (i = 0; i < ARRAY_SIZE(mdss_fb_attrs); i++) {
+			if (mdss_fb_attrs[i] == &dev_attr_cabc.attr) {
+				mdss_fb_attrs[i] = NULL;
+				break;
+			}
+		}
+	}
 	rc = sysfs_create_group(&mfd->fbi->dev->kobj, &mdss_fb_attr_group);
-	if (rc)
 		pr_err("sysfs group creation failed, rc=%d\n", rc);
 
 	return mdss_livedisplay_create_sysfs(mfd);
@@ -884,6 +1031,33 @@ static int mdss_fb_probe(struct platform_device *pdev)
 		mfd->mdp.splash_init_fnc(mfd);
 
 	INIT_DELAYED_WORK(&mfd->idle_notify_work, __mdss_fb_idle_notify_work);
+
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/03  Add for silence mode */
+	if(MSM_BOOT_MODE__SILENCE == get_boot_mode()){
+		pr_err("lcd_closebl_flag = 1\n");
+		lcd_closebl_flag = 1;
+	}
+#endif /*CONFIG_MACH_15109*/
+
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/03/12  Add for 15009 15035 clear power by android START */
+	if(is_project(OPPO_15009)){
+		memset(phys_to_virt(0x83200000 + 1080*720*3), 0x00, 200*720*3);
+	}else if(is_project(OPPO_15035)){
+		memset(phys_to_virt(0x83200000 + 800*540*3), 0x00, 160*540*3);
+	}
+	if(is_project(OPPO_15022) && (mfd->index==0) && (MSM_BOOT_MODE__NORMAL==get_boot_mode())){
+		struct mdss_overlay_private * mdp5_data = mfd_to_mdp5_data(mfd);
+		if(mdp5_data){
+			struct mdss_mdp_ctl *ctl = mdp5_data->ctl;
+			pr_err("15022 erase Powerd by android\n");
+			memset(phys_to_virt(0x83200000 + 1520*1080*3), 0x00, 300*1080*3);
+			mdss_mdp_ctl_write(ctl, MDSS_MDP_REG_CTL_START, 1);
+		}
+	}
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
 
 	return rc;
 }

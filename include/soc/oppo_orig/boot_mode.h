@@ -1,6 +1,6 @@
 /************************************************************************************
 ** File: - android\kernel\arch\arm\mach-msm\include\mach\oppo_boot.h
-** VENDOR_EDIT
+** CONFIG_MACH_OPPO
 ** Copyright (C), 2008-2012, OPPO Mobile Comm Corp., Ltd
 **
 ** Description:
@@ -16,14 +16,7 @@
 
 enum {
 	MSM_BOOT_MODE__NORMAL,
-	MSM_BOOT_MODE__FASTBOOT,
 	MSM_BOOT_MODE__RECOVERY,
-	MSM_BOOT_MODE__FACTORY,
-	MSM_BOOT_MODE__RF,
-	MSM_BOOT_MODE__WLAN,
-	MSM_BOOT_MODE__MOS,
-	MSM_BOOT_MODE__CHARGE,
-	MSM_BOOT_MODE__SILENCE,
 };
 
 int get_boot_mode(void);

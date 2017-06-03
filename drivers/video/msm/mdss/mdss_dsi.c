@@ -29,7 +29,14 @@
 #include "mdss_dsi.h"
 #include "mdss_debug.h"
 #include "mdss_livedisplay.h"
-
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/27  Add for 14045 LCD */
+#include <soc/oppo/oppo_project.h>
+/* nanwei.deng@Mobile Phone Software bsp.Driver, 2014/10/30  Add for 14045 charger */
+extern void opchg_check_lcd_on(void);
+extern void opchg_check_lcd_off(void);
+extern int lcd_dev;
+#endif /*CONFIG_MACH_15109*/
 #define XO_CLK_RATE	19200000
 
 static int mdss_dsi_pinctrl_set_state(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
@@ -172,9 +179,17 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 	 */
 	if (pdata->panel_info.cont_splash_enabled ||
 		!pdata->panel_info.mipi.lp11_init) {
-		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
-			pr_debug("reset enable: pinctrl not enabled\n");
-
+#ifndef CONFIG_MACH_15109
+			if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
+				pr_debug("reset enable: pinctrl not enabled\n");
+#else /*CONFIG_MACH_15109*/
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/04/01  Add for 15009 Power on timing START */
+		if(!is_project(OPPO_15009) && !is_project(OPPO_15029) && !is_project(OPPO_15109)){
+			if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
+				pr_debug("reset enable: pinctrl not enabled\n");
+		}
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*VEDNOR_EDIT*/
 		ret = mdss_dsi_panel_reset(pdata, 1);
 		if (ret)
 			pr_err("%s: Panel reset failed. rc=%d\n",
@@ -467,6 +482,14 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 		return -EINVAL;
 	}
 
+#ifdef CONFIG_MACH_15109
+	/* nanwei.deng@Mobile Phone Software bsp.Driver, 2014/10/30  Add for 14045 charger */
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if (is_project(OPPO_14005) || is_project(OPPO_15009) || is_project(OPPO_15037) || is_project(OPPO_15018) || is_project(OPPO_15022) || is_project(OPPO_14045) || is_project(OPPO_15005)|| is_project(OPPO_15011) || is_project(OPPO_15085) || is_project(OPPO_15109))
+	{
+		opchg_check_lcd_off();
+	}
+#endif
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
@@ -556,6 +579,14 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+#ifdef CONFIG_MACH_15109
+	/* nanwei.deng@Mobile Phone Software bsp.Driver, 2014/10/30  Add for 14045 charger */
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if (is_project(OPPO_14005) || is_project(OPPO_15009) || is_project(OPPO_15037) || is_project(OPPO_15018) || is_project(OPPO_15022) || is_project(OPPO_14045) || is_project(OPPO_15005)|| is_project(OPPO_15011) || is_project(OPPO_15085) || is_project(OPPO_15109))
+	{
+		opchg_check_lcd_on();
+	}
+#endif
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
@@ -1861,6 +1892,15 @@ int dsi_panel_device_register(struct device_node *pan_node,
 	 * If disp_en_gpio has been set previously (disp_en_gpio > 0)
 	 *  while parsing the panel node, then do not override it
 	 */
+#ifdef CONFIG_MACH_15109
+/* lile@EXP.BasicDrv.LCD, 2015-12-33, add for LCD 1.8v power supply change */
+	if((is_project(OPPO_15109) && (get_PCB_Version() == HW_VERSION__15)) && ctrl_pdata->lcd_en_gpio <= 0){
+		ctrl_pdata->lcd_en_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node, "qcom,platform-lcd-enable-gpio", 0);
+		if (!gpio_is_valid(ctrl_pdata->lcd_en_gpio))
+		    pr_err("%s:%d, LCD gpio 120 not specified\n", __func__, __LINE__);
+	}
+#endif
+
 	if (ctrl_pdata->disp_en_gpio <= 0) {
 		ctrl_pdata->disp_en_gpio = of_get_named_gpio(
 			ctrl_pdev->dev.of_node,

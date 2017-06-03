@@ -25,6 +25,17 @@
 #include "mdss_dsi.h"
 #include "mdss_livedisplay.h"
 
+#ifdef CONFIG_MACH_15109
+/* Xinqin.Yang@PhoneSW.Multimedia, 2014/08/19  Add for 14023 project */
+#include <linux/switch.h>
+#include <soc/oppo/oppo_project.h>
+//#include <soc/oppo/oppo_boot_mode.h>
+#include <soc/oppo/device_info.h>
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/04/01  Add for 15009 close cont splash in factory mode */
+#include <soc/oppo/boot_mode.h>
+int lcd_dev=0;
+static bool flag_first_set_bl = true;
+#endif /*CONFIG_CONFIG_MACH_15109*/
 #define DT_CMD_HDR 6
 
 /* NT35596 panel specific status variables */
@@ -37,6 +48,221 @@
 #define DEFAULT_MDP_TRANSFER_TIME 14000
 
 DEFINE_LED_TRIGGER(bl_led_trigger);
+
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/01  Add for ESD */
+int te_check_gpio = 910;
+DEFINE_SPINLOCK(te_count_lock);
+DEFINE_SPINLOCK(te_state_lock);
+DEFINE_SPINLOCK(delta_lock);
+
+unsigned long flags;
+struct mdss_dsi_ctrl_pdata *gl_ctrl_pdata;
+static bool first_run_reset=1;
+static bool cont_splash_flag;
+static int irq;
+static int te_state = 0;
+static struct switch_dev display_switch;
+static struct delayed_work techeck_work;
+bool te_reset_14045 = 0;
+static bool ESD_TE_TEST = 0;
+static int samsung_te_check_count = 2;
+u32 delta = 0;
+static struct completion te_comp;
+
+//wuyu debug
+extern int mdss_dsi_read_status(struct mdss_dsi_ctrl_pdata *ctrl);
+
+
+static irqreturn_t TE_irq_thread_fn(int irq, void *dev_id)
+{
+	static u32 prev = 0;
+	u32 cur = 0;
+	//pr_err("TE_irq_thread_fn\n");
+	if(samsung_te_check_count < 2){
+		ktime_t time = ktime_get();
+		cur = ktime_to_us(time);
+		if (prev) {
+			spin_lock_irqsave(&delta_lock,flags);
+			delta = cur - prev;
+			spin_unlock_irqrestore(&delta_lock,flags);
+			//pr_err("%s delta = %d\n",__func__,delta);
+		}
+		prev = cur;
+	}
+	complete(&te_comp);
+	return IRQ_HANDLED;
+}
+
+static int operate_display_switch(void)
+{
+    int ret = 0;
+    printk("%s:state=%d.\n", __func__, te_state);
+
+    spin_lock_irqsave(&te_state_lock, flags);
+    if(te_state)
+        te_state = 0;
+    else
+        te_state = 1;
+    spin_unlock_irqrestore(&te_state_lock, flags);
+
+    switch_set_state(&display_switch, te_state);
+    return ret;
+}
+
+static void techeck_work_func( struct work_struct *work )
+{
+	int ret = 0;
+	//pr_err("techeck_work_func\n");
+	INIT_COMPLETION(te_comp);
+
+	enable_irq(irq);
+	ret = wait_for_completion_killable_timeout(&te_comp,
+						msecs_to_jiffies(100));
+
+	if(ret == 0){
+		disable_irq(irq);
+		operate_display_switch();
+		return;
+	}
+	//pr_err("ret = %d\n", ret);
+	disable_irq(irq);
+	schedule_delayed_work(&techeck_work, msecs_to_jiffies(2000));
+}
+
+
+static ssize_t attr_mdss_dispswitch(struct device *dev,
+                                     struct device_attribute *attr, char *buf)
+{
+    printk("ESD function test--------\n");
+	if(is_project(OPPO_14045)){
+		te_reset_14045 = 1;
+	}
+	operate_display_switch();
+
+    return 0;
+}
+
+/*wuyu@EXP.BaseDrv.LCM, 2015-07-16, esd question */
+static char reg0a[2] = {0x0A, 0x08};
+static struct dsi_cmd_desc cmd_reg0a = {
+	{0x06, 1, 0, 1, 5, sizeof(reg0a)},
+	reg0a
+};
+
+static char reg05[2] = {0x05, 0x08};
+static struct dsi_cmd_desc cmd_reg05 = {
+	{0x06, 1, 0, 1, 5, sizeof(reg05)},
+	reg05
+};
+
+/*lile@EXP.BasicDrv.LCD, 2015-11-04, add for 15309 esd screen blackout*/
+static char reg09[2] = {0x09, 0x08};
+static struct dsi_cmd_desc cmd_reg09 = {
+	{0x06, 1, 0, 1, 5, sizeof(reg09)},
+	reg09
+};
+
+static int read_reg_cmd(struct dsi_cmd_desc * cmd , int count)
+{
+	struct dcs_cmd_req cmdreq;
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = cmd;
+	cmdreq.cmds_cnt = count;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL | CMD_REQ_RX;
+	if (is_project(OPPO_15109)){ /*lile@EXP.BasicDrv.LCD, 2015-11-04, add for 15309 esd screen blackout*/
+		cmdreq.rlen = 8;
+	}
+	else{
+		cmdreq.rlen = 1;
+	}
+	cmdreq.cb = NULL;
+	cmdreq.rbuf = gl_ctrl_pdata->status_buf.data;
+
+	return mdss_dsi_cmdlist_put(gl_ctrl_pdata, &cmdreq);
+}
+
+static ssize_t attr_readreg(struct device *dev,
+                                     struct device_attribute *attr, char *buf)
+{
+	int val_0a = 0, val_05 = 0, val_09 = 0; /*lile@EXP.BasicDrv.LCD, 2015-11-04, add for 15309 esd screen blackout*/
+	if (is_project(OPPO_15085)) {
+		memset(&(gl_ctrl_pdata->status_buf.data[0]), 0, 1);
+		read_reg_cmd(&cmd_reg0a, 1);
+		val_0a = gl_ctrl_pdata->status_buf.data[0];
+
+		memset(&(gl_ctrl_pdata->status_buf.data[0]), 0, 1);
+		read_reg_cmd(&cmd_reg05, 1);
+		val_05 = gl_ctrl_pdata->status_buf.data[0];
+	}
+	else if (is_project(OPPO_15109)) {
+		memset(&(gl_ctrl_pdata->status_buf.data[0]), 0, 1);
+		read_reg_cmd(&cmd_reg0a, 1);
+		val_0a = gl_ctrl_pdata->status_buf.data[0];
+
+		memset(&(gl_ctrl_pdata->status_buf.data[0]), 0, 1);
+		read_reg_cmd(&cmd_reg09, 1);
+		val_09 = gl_ctrl_pdata->status_buf.data[0];
+	}
+
+    return snprintf(buf, PAGE_SIZE, "reg0a=0x%x, reg05=0x%x, reg09=0x%x\n", val_0a, val_05, val_09);
+}
+
+static struct class * mdss_lcd;
+static struct device * dev_lcd;
+static struct device_attribute mdss_lcd_attrs[] = {
+	__ATTR(dispswitch, S_IRUGO|S_IWUSR, attr_mdss_dispswitch, NULL),
+	__ATTR(readreg, S_IRUGO|S_IWUSR, attr_readreg, NULL),
+	__ATTR_NULL,
+	};
+#endif /*CONFIG_MACH_15109*/
+
+#ifdef CONFIG_MACH_15109
+//lile@EXP.BasicDrv.LCD, 2015-12-17, lile add for esd
+static char write_cmd00[2] = {0x11};
+static char write_cmd01[2] = {0x29};
+static char write_cmd02[2] = {0x13};
+static char write_cmd03[2] = {0x20};
+static char write_cmd04[2] = {0x38};
+
+static struct dsi_cmd_desc esd_cmds[] = {
+{{0x05, 1, 0, 0, 0, sizeof(write_cmd00)}, write_cmd00},
+{{0x05, 1, 0, 0, 0, sizeof(write_cmd01)}, write_cmd01},
+{{0x05, 1, 0, 0, 0, sizeof(write_cmd02)}, write_cmd02},
+{{0x05, 1, 0, 0, 0, sizeof(write_cmd03)}, write_cmd03},
+{{0x05, 1, 0, 0, 0, sizeof(write_cmd04)}, write_cmd04},
+};
+
+static void mdss_dsi_write_status(struct mdss_dsi_ctrl_pdata *ctrl, struct dsi_cmd_desc *esd_cmds, int count)
+{
+	struct dcs_cmd_req cmdreq;
+	struct mdss_panel_info *pinfo;
+	int i = 0, ret;
+	pr_err("lile add for Tianma!\n");
+	pinfo = &(ctrl->panel_data.panel_info);
+	if (pinfo->dcs_cmd_by_left) {
+	 if (ctrl->ndx != DSI_CTRL_LEFT)
+	 return;
+	}
+	for (; i < 5; i++){
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = &esd_cmds[i];
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL | CMD_REQ_LP_MODE;//CMD_REQ_LP_MODE
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+	ret = mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+	pr_err("%s: write cmd%d ret = %d\n", __func__, i, ret);
+	}
+}
+#endif
+
+#ifdef CONFIG_MACH_15109
+/* Xinqin.Yang@PhoneSW.Multimedia, 2014/09/03  Add for lm3630 */
+extern  int lm3630_bank_a_update_status(u32 bl_level);
+#endif /*CONFIG_CONFIG_MACH_15109*/
+
 
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
 {
@@ -208,10 +434,262 @@ static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
 
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/07/28  Add for LCD acl and hbm function */
+bool flag_lcd_off = false;
+
+static DEFINE_MUTEX(lcd_mutex);
+
+enum
+{
+    ACL_LEVEL_0 = 0,
+    ACL_LEVEL_1,
+    ACL_LEVEL_2,
+    ACL_LEVEL_3,
+
+};
+int acl_mode = ACL_LEVEL_0; //defaoult mode level 1
+
+static char set_acl[2] = {0x55, 0x0};	/* DTYPE_DCS_WRITE1 */
+static struct dsi_cmd_desc set_acl_cmd = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(set_acl)},
+	set_acl
+};
+void set_acl_mode(int level)
+{
+	struct dcs_cmd_req cmdreq;
+	/* wuyu@EXP.BaseDrv.LCM, 2015-05-18, add micro OPPO_15011, (OPPO15011=OPPO_15018) */
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if(!is_project(OPPO_14005) && !is_project(OPPO_15011) && !is_project(OPPO_15018) && !is_project(OPPO_15022) && !is_project(OPPO_15085))
+		return;
+	pr_err("%s: level=%d\n", __func__, level);
+	if(level < 0 || level > 3){
+		pr_err("%s: invalid input %d! \n",__func__,level);
+		return;
+	}
+	acl_mode = level;
+	mutex_lock(&lcd_mutex);
+	if(flag_lcd_off == true)
+    {
+        printk(KERN_INFO "lcd is off,don't allow to set acl mode !\n");
+        mutex_unlock(&lcd_mutex);
+        return;
+    }
+	set_acl[1] = (unsigned char)level;
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = &set_acl_cmd;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	mdss_dsi_cmdlist_put(gl_ctrl_pdata, &cmdreq);
+	mutex_unlock(&lcd_mutex);
+}
+static char set_hbm[2] = {0x53, 0x20};	/* DTYPE_DCS_WRITE1 */
+static struct dsi_cmd_desc set_hbm_cmd = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(set_hbm)},
+	set_hbm
+};
+void set_hbm_mode(int level)
+{
+	struct dcs_cmd_req cmdreq;
+	/* wuyu@EXP.BaseDrv.LCM, 2015-05-18, add micro OPPO_15011, (OPPO15011=OPPO_15018) */
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if(!is_project(OPPO_14005) && !is_project(OPPO_15011) && !is_project(OPPO_15018) && !is_project(OPPO_15022) && !is_project(OPPO_15085))
+		return;
+	pr_err("%s: level=%d\n", __func__, level);
+	if(level < 0 || level > 2){
+		pr_err("%s: invalid input %d! \n",__func__,level);
+		return;
+	}
+	mutex_lock(&lcd_mutex);
+	if(flag_lcd_off == true)
+    {
+        printk(KERN_INFO "lcd is off,don't allow to set hbm !\n");
+        mutex_unlock(&lcd_mutex);
+        return;
+    }
+	switch(level) {
+		case 0:
+			set_hbm[1] = 0x20;
+			break;
+		case 1:
+		case 2:
+			set_hbm[1] = 0xe0;
+			break;
+	}
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = &set_hbm_cmd;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	mdss_dsi_cmdlist_put(gl_ctrl_pdata, &cmdreq);
+	mutex_unlock(&lcd_mutex);
+}
+static int send_samsung_fit_cmd(struct dsi_cmd_desc * cmd , int count)
+{
+	struct dcs_cmd_req cmdreq;
+	//pr_err("samsung_fit size : %d\n",count);
+	//return;
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = cmd;
+	cmdreq.cmds_cnt = count;
+	cmdreq.flags = CMD_REQ_COMMIT;// | CMD_REQ_LP_MODE;//CMD_REQ_LP_MODE
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+	return mdss_dsi_cmdlist_put(gl_ctrl_pdata, &cmdreq);
+}
+static int set_acl_resume_mode(int level){
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if(!is_project(OPPO_14005) && !is_project(OPPO_15011) && !is_project(OPPO_15018) && !is_project(OPPO_15022) && !is_project(OPPO_15085))
+		return 0;
+	pr_err("%s: level=%d\n", __func__, level);
+	set_acl[1] = (unsigned char)level;
+	return send_samsung_fit_cmd(&set_acl_cmd,1);
+}
+
+#endif /*CONFIG_MACH_15109*/
+//lile@EXP.BasicDrv.LCD, 2016-01-04, add reset cmds for Tianma HD LCD ESD blurred
+struct dsi_panel_cmds cabc_esd_reset_sequence;
+
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/05/19  Add for 15009 cabc START */
+struct dsi_panel_cmds cabc_off_sequence;
+struct dsi_panel_cmds cabc_user_interface_image_sequence;
+struct dsi_panel_cmds cabc_still_image_sequence;
+struct dsi_panel_cmds cabc_video_image_sequence;
+extern int set_backlight_pwm(int state);
+extern void set_backlight_again(int mode);
+
+enum
+{
+    CABC_CLOSE = 0,
+    CABC_LOW_MODE,
+    CABC_MIDDLE_MODE,
+    CABC_HIGH_MODE,
+};
+int cabc_mode = CABC_HIGH_MODE; //default mode level 3 in dtsi file
+static bool pwm2DCmax_cabcoff= false;//backlight pwm to DCmax when panel cabc off
+
+int set_cabc(int level)
+{
+    int ret = 0;
+
+	if(!(is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035)||is_project(OPPO_15109))){
+		return 0;
+	}
+	pr_err("%s : %d \n",__func__,level);
+
+    mutex_lock(&lcd_mutex);
+
+	if(flag_lcd_off == true)
+    {
+        printk(KERN_INFO "lcd is off,don't allow to set cabc\n");
+        cabc_mode = level;
+        mutex_unlock(&lcd_mutex);
+        return 0;
+    }
+
+	mdss_dsi_clk_ctrl(gl_ctrl_pdata, DSI_ALL_CLKS, 1);
+	/*
+	  *	some kind of panels support backlight_pwm to DCmax when cabc off,
+	  *	so, we try to keep backlight_pwm alway on while cabc off, to avoid
+	  *	backlight flash when backlight_pwm burst on.
+	*/
+    switch(level)
+    {
+        case 0:
+			if(!pwm2DCmax_cabcoff)
+		set_backlight_pwm(0);
+            set_backlight_again(0);
+			mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_off_sequence);
+            cabc_mode = CABC_CLOSE;
+            break;
+        case 1:
+            mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_user_interface_image_sequence);
+            cabc_mode = CABC_LOW_MODE;
+			if(!pwm2DCmax_cabcoff)
+				set_backlight_pwm(1);
+            break;
+        case 2:
+            mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_still_image_sequence);
+            cabc_mode = CABC_MIDDLE_MODE;
+			if(!pwm2DCmax_cabcoff)
+				set_backlight_pwm(1);
+            break;
+        case 3:
+            mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_video_image_sequence);
+            cabc_mode = CABC_HIGH_MODE;
+			if(!pwm2DCmax_cabcoff)
+				set_backlight_pwm(1);
+            break;
+        default:
+            pr_err("%s Leavel %d is not supported!\n",__func__,level);
+            ret = -1;
+            break;
+    }
+    mdss_dsi_clk_ctrl(gl_ctrl_pdata, DSI_ALL_CLKS, 0);
+    mutex_unlock(&lcd_mutex);
+    return ret;
+}
+
+static int set_cabc_resume_mode(int mode)
+{
+    int ret;
+	if(!(is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035) ||is_project(OPPO_15109))){
+		return 0;
+	}
+	pr_err("%s : %d yxr \n",__func__,mode);
+    switch(mode)
+    {
+        case 0:
+            set_backlight_pwm(0);
+			mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_off_sequence);
+            break;
+        case 1:
+            mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_user_interface_image_sequence);
+			set_backlight_pwm(1);
+            break;
+        case 2:
+            mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_still_image_sequence);
+			set_backlight_pwm(1);
+            break;
+        case 3:
+           mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_video_image_sequence);
+		   set_backlight_pwm(1);
+            break;
+        default:
+            pr_err("%s  %d is not supported!\n",__func__,mode);
+            ret = -1;
+            break;
+    }
+    return ret;
+}
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+
+
 static int mdss_dsi_request_gpios(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	int rc = 0;
 
+#ifdef CONFIG_MACH_15109
+/* lile@EXP.BasicDrv.LCD, 2015-12-33, add for LCD 1.8v power supply change */
+	if ((is_project(OPPO_15109) && (get_PCB_Version() == HW_VERSION__15)) && gpio_is_valid(ctrl_pdata->lcd_en_gpio)) {
+		rc = gpio_request(ctrl_pdata->lcd_en_gpio,
+						"lcd_enable");
+		if (rc) {
+			pr_err("request lcd_en gpio failed, rc=%d\n",
+				       rc);
+			goto disp_en_gpio_err;
+		}
+	}
+#endif
 	if (gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
 		rc = gpio_request(ctrl_pdata->disp_en_gpio,
 						"disp_enable");
@@ -272,6 +750,13 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
+#ifdef CONFIG_MACH_15109
+/* lile@EXP.BasicDrv.LCD, 2015-12-33, add for LCD 1.8v power supply change */
+	if ((is_project(OPPO_15109) && (get_PCB_Version() == HW_VERSION__15)) && !gpio_is_valid(ctrl_pdata->lcd_en_gpio)) {
+		pr_debug("%s:%d, lcd_en_gpio reset line not configured\n",
+			   __func__, __LINE__);
+	}
+#endif
 	if (!gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
 		pr_debug("%s:%d, reset line not configured\n",
 			   __func__, __LINE__);
@@ -293,7 +778,46 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 			return rc;
 		}
 		if (!pinfo->cont_splash_enabled) {
-			if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
+if(is_project(OPPO_15009) || is_project(OPPO_15109)){
+#ifdef CONFIG_MACH_15109
+/* lile@EXP.BasicDrv.LCD, 2015-12-33, add for LCD 1.8v power supply change */
+				if ((is_project(OPPO_15109) && (get_PCB_Version() == HW_VERSION__15)) && gpio_is_valid(ctrl_pdata->lcd_en_gpio))
+					gpio_set_value((ctrl_pdata->lcd_en_gpio), 1);
+					mdelay(3);
+#endif
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/03/23  Add for 15009 modify +-5v timing START */
+			if(lcd_dev == LCD_15109_BOE_ILI9881C){
+				if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
+					gpio_set_value((ctrl_pdata->disp_en_gpio), 1);
+				mdelay(6); //lile@EXP.BasicDrv.LCD, 2016-02-16, add for Tps_RES VDDI/VSP on reset high, it must longer than 5ms
+				for (i = 0; i < pdata->panel_info.rst_seq_len; ++i) {
+					gpio_set_value((ctrl_pdata->rst_gpio),
+						pdata->panel_info.rst_seq[i]);
+					if (pdata->panel_info.rst_seq[++i])
+						usleep(pinfo->rst_seq[i] * 1000);
+				}
+				mdelay(2);
+				if (gpio_is_valid(ctrl_pdata->bklt_en_gpio))
+					gpio_set_value((ctrl_pdata->bklt_en_gpio), 1);
+			}else{
+				if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
+					gpio_set_value((ctrl_pdata->disp_en_gpio), 1);
+					mdelay(3);
+				if (gpio_is_valid(ctrl_pdata->bklt_en_gpio))
+					gpio_set_value((ctrl_pdata->bklt_en_gpio), 1);
+					mdelay(2);
+				for (i = 0; i < pdata->panel_info.rst_seq_len; ++i) {
+					gpio_set_value((ctrl_pdata->rst_gpio),
+					pdata->panel_info.rst_seq[i]);
+					if (pdata->panel_info.rst_seq[++i])
+						usleep(pinfo->rst_seq[i] * 1000);
+				}
+			}
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+			}else{
+				if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
 				gpio_set_value((ctrl_pdata->disp_en_gpio), 1);
 
 			for (i = 0; i < pdata->panel_info.rst_seq_len; ++i) {
@@ -305,6 +829,7 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 
 			if (gpio_is_valid(ctrl_pdata->bklt_en_gpio))
 				gpio_set_value((ctrl_pdata->bklt_en_gpio), 1);
+			}
 		}
 
 		if (gpio_is_valid(ctrl_pdata->mode_gpio)) {
@@ -320,7 +845,134 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 			pr_debug("%s: Reset panel done\n", __func__);
 		}
 	} else {
-		if (gpio_is_valid(ctrl_pdata->bklt_en_gpio)) {
+	if(is_project(OPPO_15009) || is_project(OPPO_15109)){
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/03/23  Add for 15009 jdi modify +-5v delay START */
+		if(lcd_dev == LCD_15009_TM_NT35592){
+				mdelay(14);
+				if (gpio_is_valid(ctrl_pdata->bklt_en_gpio)) {
+				gpio_set_value((ctrl_pdata->bklt_en_gpio), 0);
+				gpio_free(ctrl_pdata->bklt_en_gpio);
+				}
+				mdelay(3);
+				if (gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
+				gpio_set_value((ctrl_pdata->disp_en_gpio), 0);
+				gpio_free(ctrl_pdata->disp_en_gpio);
+				}
+				mdelay(10);
+				gpio_set_value((ctrl_pdata->rst_gpio), 0);
+				gpio_free(ctrl_pdata->rst_gpio);
+			}else if(lcd_dev == LCD_15109_BOE_ILI9881C){
+				mdelay(14);
+				gpio_set_value((ctrl_pdata->rst_gpio), 0);
+				gpio_free(ctrl_pdata->rst_gpio);
+				mdelay(10);
+				if (gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
+				    gpio_set_value((ctrl_pdata->disp_en_gpio), 0);
+				    gpio_free(ctrl_pdata->disp_en_gpio);
+				}
+				mdelay(10);
+				if (gpio_is_valid(ctrl_pdata->bklt_en_gpio)) {
+				    gpio_set_value((ctrl_pdata->bklt_en_gpio), 0);
+				    gpio_free(ctrl_pdata->bklt_en_gpio);
+				}
+			}
+			else{
+				mdelay(230);
+				gpio_set_value((ctrl_pdata->rst_gpio), 0);
+				gpio_free(ctrl_pdata->rst_gpio);
+				mdelay(14);
+				if (gpio_is_valid(ctrl_pdata->bklt_en_gpio)) {
+				    gpio_set_value((ctrl_pdata->bklt_en_gpio), 0);
+				    gpio_free(ctrl_pdata->bklt_en_gpio);
+				}
+				mdelay(3);
+				if (gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
+				    gpio_set_value((ctrl_pdata->disp_en_gpio), 0);
+				    gpio_free(ctrl_pdata->disp_en_gpio);
+				}
+#ifdef CONFIG_MACH_15109
+/* lile@EXP.BasicDrv.LCD, 2015-12-33, add for LCD 1.8v power supply change */
+				mdelay(3);
+				if ((is_project(OPPO_15109) && (get_PCB_Version() == HW_VERSION__15)) && gpio_is_valid(ctrl_pdata->lcd_en_gpio)) {
+				    gpio_set_value((ctrl_pdata->lcd_en_gpio), 0);
+				    gpio_free(ctrl_pdata->lcd_en_gpio);
+				}
+#endif
+                //guoling@MM.lcddriver modify for avoid current when sleep
+				if(is_project(OPPO_15109) && (get_PCB_Version() == HW_VERSION__10 || get_PCB_Version() == HW_VERSION__11)){
+				if (gpio_is_valid(904)) {
+			        rc = gpio_request(904,"ID_1");
+				    if (rc) {
+				        pr_err("request ID_1 904  failed, rc=%d\n", rc);
+				    }
+
+				    gpio_set_value(904, 0);
+				    rc = gpio_direction_output(904, 0);
+				    if (rc) {
+				        pr_err("gpio_direction_output ID_1 904  failed, rc=%d\n", rc);
+				    }
+				    gpio_free(904);
+			    }else{
+		            pr_err("ID_1 904 isn't valid");
+			    }
+
+			    if (gpio_is_valid(905)) {
+			        rc = gpio_request(905,"ID_2");
+				    if (rc) {
+				        pr_err("request ID_2 905  failed, rc=%d\n", rc);
+				    }
+
+				    gpio_set_value(905, 0);
+				    rc = gpio_direction_output(905, 0);
+				    if (rc) {
+				        pr_err("gpio_direction_output ID_2 905  failed, rc=%d\n", rc);
+				    }
+				    gpio_free(905);
+			    }else{
+		            pr_err("ID_2 905 isn't valid");
+			    }
+			    }else if(is_project(OPPO_15109)){
+			        if (gpio_is_valid(903)) {
+			        rc = gpio_request(903,"ID_1");
+				    if (rc) {
+				        pr_err("request ID_1 903  failed, rc=%d\n", rc);
+				    }
+
+				    gpio_set_value(903, 0);
+				    rc = gpio_direction_output(903, 0);
+				    if (rc) {
+				        pr_err("gpio_direction_output ID_1 903  failed, rc=%d\n", rc);
+				    }
+				    gpio_free(903);
+			    }else{
+		            pr_err("ID_1 903 isn't valid");
+			    }
+
+			    if (gpio_is_valid(1018)) {
+			        rc = gpio_request(1018,"ID_2");
+				    if (rc) {
+				        pr_err("request ID_2 1018  failed, rc=%d\n", rc);
+				    }
+
+				    gpio_set_value(1018, 0);
+				    rc = gpio_direction_output(1018, 0);
+				    if (rc) {
+				        pr_err("gpio_direction_output ID_2 1018  failed, rc=%d\n", rc);
+				    }
+				    gpio_free(1018);
+			    }else{
+		            pr_err("ID_2 1018 isn't valid");
+			    }
+			    }
+
+			}
+			if (gpio_is_valid(ctrl_pdata->mode_gpio))
+				gpio_free(ctrl_pdata->mode_gpio);
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+		}else{
+			if (gpio_is_valid(ctrl_pdata->bklt_en_gpio)) {
 			gpio_set_value((ctrl_pdata->bklt_en_gpio), 0);
 			gpio_free(ctrl_pdata->bklt_en_gpio);
 		}
@@ -332,6 +984,7 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 		gpio_free(ctrl_pdata->rst_gpio);
 		if (gpio_is_valid(ctrl_pdata->mode_gpio))
 			gpio_free(ctrl_pdata->mode_gpio);
+		}
 	}
 	return rc;
 }
@@ -537,11 +1190,51 @@ static void mdss_dsi_panel_switch_mode(struct mdss_panel_data *pdata,
 	return;
 }
 
+
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/03  Add for silence mode */
+extern int lcd_closebl_flag;
+#endif /*CONFIG_MACH_15109*/
+
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/07/10  Add for 15035 bl START */
+static char lcd_pwm[2] = {0x51, 0x0};	/* DTYPE_DCS_WRITE1 */
+static struct dsi_cmd_desc set_pwm_cmd = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(lcd_pwm)},
+	lcd_pwm
+};
+
+void set_bl_brightness(uint bl_level){
+	lcd_pwm[1] = bl_level;
+	pr_err("%s:bl_level = %d\n", __func__, bl_level);
+
+	send_samsung_fit_cmd(&set_pwm_cmd ,1);
+}
+#endif /*CONFIG_MACH_15109*/
+
 static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 							u32 bl_level)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_dsi_ctrl_pdata *sctrl = NULL;
+#ifdef CONFIG_MACH_15109
+/* Xinqin.Yang@PhoneSW.Multimedia, 2014/09/03  Modify for backlight */
+	if (lcd_closebl_flag){ /* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/05/28  Add for silence mode */
+		pr_err("%s -- MSM_BOOT_MODE__SILENCE\n",__func__);
+		bl_level = 0;
+	}
+
+	if (is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15109)){
+		if (flag_first_set_bl) {
+			set_backlight_pwm(1);
+			flag_first_set_bl = false;
+		}
+	}
+
+	if (is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035) || is_project(OPPO_15109)) {
+		lm3630_bank_a_update_status(bl_level);
+	}
+#endif /* CONFIG_MACH_15109 */
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -622,6 +1315,38 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	if (ctrl->on_cmds.cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, &ctrl->on_cmds);
 
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/05/29  Add for 15009 cabc START */
+		if((is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035)||is_project(OPPO_15109)) && ctrl->ndx==0){
+			set_backlight_pwm(1);
+			if(cabc_mode != CABC_HIGH_MODE){
+					set_cabc_resume_mode(cabc_mode);
+			}
+		}
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/02  Add for ESD */
+/* wuyu@EXP.BaseDrv.LCM, 2015-05-18, add micro OPPO_15011, (OPPO15011=OPPO_15018) */
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if(is_project(OPPO_14005) || is_project(OPPO_15011) || is_project(OPPO_15018) || is_project(OPPO_15022) || is_project(OPPO_15085)){
+		if(acl_mode != ACL_LEVEL_0){
+				set_acl_resume_mode(acl_mode);
+		}
+	}
+	if(ESD_TE_TEST){
+		if(first_run_reset==1 && !cont_splash_flag){
+			first_run_reset=0;
+		}
+		else{
+			schedule_delayed_work(&techeck_work, msecs_to_jiffies(3000));
+		}
+	}
+	mutex_lock(&lcd_mutex);
+	flag_lcd_off = false;
+	mutex_unlock(&lcd_mutex);
+#endif /*CONFIG_MACH_15109*/
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_UNBLANK;
 	pr_debug("%s:-\n", __func__);
@@ -688,6 +1413,16 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 	if (ctrl->off_cmds.cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, &ctrl->off_cmds);
 
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/02  Add for ESD */
+	if(ESD_TE_TEST){
+		cancel_delayed_work_sync(&techeck_work);
+			mdelay(6);
+	}
+	mutex_lock(&lcd_mutex);
+	flag_lcd_off = true;
+	mutex_unlock(&lcd_mutex);
+#endif /*CONFIG_MACH_15109*/
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_BLANK;
 	pr_debug("%s:-\n", __func__);
@@ -1054,14 +1789,114 @@ static int mdss_dsi_parse_reset_seq(struct device_node *np,
 
 static int mdss_dsi_gen_read_status(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
-	if (ctrl_pdata->status_buf.data[0] !=
-					ctrl_pdata->status_value) {
-		pr_err("%s: Read back value from panel is incorrect\n",
-							__func__);
-		return -EINVAL;
-	} else {
+#ifdef CONFIG_MACH_15109
+	/* Goushengjun@Mobile Phone Software Dept.Driver, 2015/13/10  Modify for 15029 esd check */
+	if(is_project(15029)){
+		if (((ctrl_pdata->status_buf.data[0] == 0x80) || (ctrl_pdata->status_buf.data[0] == 0x81))
+                &&(ctrl_pdata->status_buf.data[1] == 0x73)){
+				pr_debug("Neal %s: Read back value from panel is correct, read value[0x%x] [0x%x]\n",
+						__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_buf.data[1]);
+				return 1;
+			} else {
+				pr_err("Neal %s: Read back value from panel is incorrect, read value[0x0%x] [0x%x]\n",
+						__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_buf.data[1]);
+				return -EINVAL;
+			}
+	}
+	/*lile@EXP.BasicDrv.LCD, 2015-11-04, add for 15309 esd screen blackout*/
+	else if(is_project(15109)){
+		if(lcd_dev == LCD_15109_TRULY_HX8394F){
+			/*pr_err("Neal %s: Read back value from panel is  read value[0x%x] [0x%x] [0x%x] [0x%x]\n",
+				__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_buf.data[1],
+				ctrl_pdata->status_buf.data[2], ctrl_pdata->status_buf.data[3]);*/
+			if ((ctrl_pdata->status_buf.data[0] == 0x05)
+				&&(ctrl_pdata->status_buf.data[1] == 0x15)){//lile@EXP.BasicDrv.LCD, 2015-12-07, change data[1] for mipi changed to 335MHz
+
+					memset(&(gl_ctrl_pdata->status_buf.data[0]), 0, 1);
+					read_reg_cmd(&cmd_reg09, 1);
+					if (gl_ctrl_pdata->status_buf.data[0] != 0x80) {
+						pr_err("TRULY %s: Read(reg09=0x%x) back value from panel is incorrect\n",
+										__func__, gl_ctrl_pdata->status_buf.data[0]);
+						return -EINVAL;
+					}
+
+				return 1;
+			} else {
+				pr_err("TRULY %s: Read back value from panel is incorrect read value[0x0%x] [0x%x] [0x0%x] [0x0%x]\n",
+							__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_buf.data[1],
+							ctrl_pdata->status_buf.data[2], ctrl_pdata->status_buf.data[3]);
+
+				return -EINVAL;
+			}
+		}
+		else if(lcd_dev == LCD_15109_TM_NT35592) {
+			//lile@EXP.BasicDrv.LCD, 2016-01-04, add reset cmds for Tianma HD LCD ESD blurred
+			mdss_dsi_panel_cmds_send(gl_ctrl_pdata, &cabc_esd_reset_sequence);
+			if ((ctrl_pdata->status_buf.data[0] == 0x05)
+				&&(ctrl_pdata->status_buf.data[1] == 0x04)){//lile@EXP.BasicDrv.LCD, 2015-12-07, add for esd check, rm data[2] and data[3] check
+
+					memset(&(gl_ctrl_pdata->status_buf.data[0]), 0, 1);
+					read_reg_cmd(&cmd_reg0a, 1);
+				if (gl_ctrl_pdata->status_buf.data[0] != 0x9C) {
+					pr_err("Tianma %s: Read(reg0a=0x%x) back value from panel is incorrect\n",
+									__func__, gl_ctrl_pdata->status_buf.data[0]);
+					return -EINVAL;
+				}
+				return 1;
+			} else {
+				pr_err("Tianma %s: Read back value from panel is incorrect read value[0x0%x] [0x%x] [0x0%x] [0x0%x]\n",
+							__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_buf.data[1],
+							ctrl_pdata->status_buf.data[2], ctrl_pdata->status_buf.data[3]);
+
+				return -EINVAL;
+			}
+
+		}
+		else {
+			if (ctrl_pdata->status_buf.data[0] !=
+						ctrl_pdata->status_value) {
+				pr_err("%s: Read back value from panel is incorrect read value[0x%x] != status_value [0x%x]\n",
+								__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_value);
+				return -EINVAL;
+			}
+			return 1;
+		}
+	}
+	else if(is_project(15035)){
+	//lile@EXP.BasicDrv.LCD, 2015-12-17, lile add for esd
+		if (is_project(OPPO_15035) && (lcd_dev == LCD_15035_TM_OTM9605)){
+			mdss_dsi_write_status(ctrl_pdata, esd_cmds, 1);
+			return 1;
+		}
+		else if (ctrl_pdata->status_buf.data[0] !=
+						ctrl_pdata->status_value) {
+			pr_err("%s: Read back value from panel is incorrect read value[0x%x] != status_value [0x%x]\n",
+							__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_value);
+			return -EINVAL;
+		}
 		return 1;
 	}
+	else {
+		if (ctrl_pdata->status_buf.data[0] !=
+						ctrl_pdata->status_value) {
+			pr_err("%s: Read back value from panel is incorrect read value[0x%x] != status_value [0x%x]\n",
+							__func__, ctrl_pdata->status_buf.data[0], ctrl_pdata->status_value);
+			return -EINVAL;
+		} else {
+			/*wuyu@EXP.BaseDrv.LCM, 2015-07-16, esd question */
+			if (is_project(OPPO_15085)) {
+				memset(&(gl_ctrl_pdata->status_buf.data[0]), 0, 1);
+				read_reg_cmd(&cmd_reg05, 1);
+				if (gl_ctrl_pdata->status_buf.data[0] != 0x0) {
+					pr_err("%s: Read(wuyu--reg05=0x%x) back value from panel is incorrect\n",
+									__func__, gl_ctrl_pdata->status_buf.data[0]);
+					return -EINVAL;
+				}
+			}
+			return 1;
+		}
+	}
+#endif /*CONFIG_MACH_15109*/
 }
 
 static int mdss_dsi_nt35596_read_status(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
@@ -1197,6 +2032,15 @@ static int mdss_dsi_parse_panel_features(struct device_node *np,
 		pr_warn("ESD should not be enabled if panel ACK is disabled\n");
 		pinfo->esd_check_enabled = false;
 	}
+
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/04/10  Add for esd check */
+/* wuyu@EXP.BaseDrv.LCM, 2015-05-18, add micro OPPO_15011, (OPPO15011=OPPO_15018) */
+/*huqiao@EXP.BasicDrv.Basic add for clone 15085*/
+	if(MSM_BOOT_MODE__NORMAL!=get_boot_mode() && (is_project(OPPO_14005) || is_project(OPPO_15011) || is_project(OPPO_15018) || is_project(OPPO_15022) || is_project(OPPO_15085) || is_project(OPPO_15109))){
+		pinfo->esd_check_enabled = false;
+	}
+#endif /*CONFIG_MACH_15109*/
 
 	if (ctrl->disp_en_gpio <= 0) {
 		ctrl->disp_en_gpio = of_get_named_gpio(
@@ -1459,9 +2303,8 @@ static void mdss_dsi_set_lane_clamp_mask(struct mipi_panel_info *mipi)
 	mipi->phy_lane_clamp_mask = mask;
 }
 
-
 static int mdss_panel_parse_dt(struct device_node *np,
-			struct mdss_dsi_ctrl_pdata *ctrl_pdata)
+		struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	u32 tmp;
 	int rc, i, len;
@@ -1774,9 +2617,37 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	mdss_dsi_parse_reset_seq(np, pinfo->rst_seq, &(pinfo->rst_seq_len),
 		"qcom,mdss-dsi-reset-sequence");
 
-	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->on_cmds,
-		"qcom,mdss-dsi-on-command", "qcom,mdss-dsi-on-command-state");
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/05/19  Add for set cabc START */
+		mdss_dsi_parse_dcs_cmds(np, &cabc_off_sequence,
+			"qcom,mdss-dsi-cabc-off-command", "qcom,mdss-dsi-off-command-state");
+		mdss_dsi_parse_dcs_cmds(np, &cabc_user_interface_image_sequence,
+			"qcom,mdss-dsi-cabc-ui-command", "qcom,mdss-dsi-off-command-state");
+		mdss_dsi_parse_dcs_cmds(np, &cabc_still_image_sequence,
+			"qcom,mdss-dsi-cabc-still-image-command", "qcom,mdss-dsi-off-command-state");
+		mdss_dsi_parse_dcs_cmds(np, &cabc_video_image_sequence,
+			"qcom,mdss-dsi-cabc-video-command", "qcom,mdss-dsi-off-command-state");
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+//lile@EXP.BasicDrv.LCD, 2016-01-04, add reset cmds for Tianma HD LCD ESD blurred
+		if(is_project(OPPO_15109)&&(lcd_dev == LCD_15109_TM_NT35592)){
+			mdss_dsi_parse_dcs_cmds(np, &cabc_esd_reset_sequence,
+				"qcom,mdss-dsi-esd-reset-command", "qcom,mdss-dsi-on-command-state");
+		}
 
+		if(is_project(OPPO_15009)&&(lcd_dev == LCD_15009_JDI_NT35592 )){
+			mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->balance_on_cmds,
+			"qcom,mdss-dsi-on-command-cabc", "qcom,mdss-dsi-on-command-state");
+			mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->yellow_on_cmds,
+			"qcom,mdss-dsi-on-command-cabc-yellow", "qcom,mdss-dsi-on-command-state");
+			mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->normal_on_cmds,
+			"qcom,mdss-dsi-on-command-cabc-normal", "qcom,mdss-dsi-on-command-state");
+
+			ctrl_pdata->on_cmds=ctrl_pdata->balance_on_cmds;
+		}else{
+			mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->on_cmds,
+			"qcom,mdss-dsi-on-command", "qcom,mdss-dsi-on-command-state");
+		}
 	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->post_panel_on_cmds,
 		"qcom,mdss-dsi-post-panel-on-command", NULL);
 
@@ -1798,7 +2669,17 @@ static int mdss_panel_parse_dt(struct device_node *np,
 			ctrl_pdata->status_mode = ESD_BTA;
 		} else if (!strcmp(data, "reg_read")) {
 			ctrl_pdata->status_mode = ESD_REG;
-			ctrl_pdata->status_cmds_rlen = 1;
+#ifndef CONFIG_MACH_15109
+				ctrl_pdata->status_cmds_rlen = 1;
+#else /*CONFIG_MACH_15109*/
+/* <- YongPeng.Yi@SWDP.MultiMedia, 2015/06/11  Add for 15037 read reg START */
+			if((lcd_dev == LCD_15037_TRULY_HX8389C)||(lcd_dev == LCD_15035_TM_OTM9605)||(lcd_dev == LCD_15069_TM_OTM9605A)||
+			(lcd_dev == LCD_15035_TRULY_HX8389C) || is_project(OPPO_15029) || is_project(OPPO_15109)){
+				ctrl_pdata->status_cmds_rlen = 8;
+			}else{
+				ctrl_pdata->status_cmds_rlen = 1;
+			}
+#endif /*CONFIG_MACH_15109*/
 			ctrl_pdata->check_read_status =
 						mdss_dsi_gen_read_status;
 		} else if (!strcmp(data, "reg_read_nt35596")) {
@@ -1846,11 +2727,27 @@ int mdss_dsi_panel_init(struct device_node *node,
 	int rc = 0;
 	static const char *panel_name;
 	struct mdss_panel_info *pinfo;
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/09/23  Add for registe panel info */
+	static const char *panel_manufacture;
+    static const char *panel_version;
+#endif /*CONFIG_MACH_15109*/
 
 	if (!node || !ctrl_pdata) {
 		pr_err("%s: Invalid arguments\n", __func__);
 		return -ENODEV;
 	}
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/07/28  Add for lcd acl and hbm mode */
+	gl_ctrl_pdata = ctrl_pdata;
+#endif /*CONFIG_MACH_15109*/
+#ifdef CONFIG_MACH_15109
+	/* Gou shengjun@Mobile Phone Software Dept.Driver, 2015/11/24  Add for backght flash when bl_pwm burst on */
+
+	if(is_project(OPPO_15029) || is_project(OPPO_15109)){
+		pwm2DCmax_cabcoff = true;
+	}
+#endif /*CONFIG_MACH_15109*/
 
 	pinfo = &ctrl_pdata->panel_data.panel_info;
 
@@ -1865,6 +2762,69 @@ int mdss_dsi_panel_init(struct device_node *node,
 		strlcpy(&pinfo->panel_name[0], panel_name, MDSS_MAX_PANEL_LEN);
 	}
 	rc = mdss_panel_parse_dt(node, ctrl_pdata);
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/09/23  Add for registe panel info */
+	panel_manufacture = of_get_property(node, "qcom,mdss-dsi-panel-manufacture", NULL);
+	if (!panel_manufacture)
+		pr_info("%s:%d, panel manufacture not specified\n", __func__, __LINE__);
+	else
+		pr_info("%s: Panel Manufacture = %s\n", __func__, panel_manufacture);
+	panel_version = of_get_property(node, "qcom,mdss-dsi-panel-version", NULL);
+	if (!panel_version)
+		pr_info("%s:%d, panel version not specified\n", __func__, __LINE__);
+	else
+		pr_info("%s: Panel Version = %s\n", __func__, panel_version);
+	register_device_proc("lcd", (char *)panel_version, (char *)panel_manufacture);
+
+/*lile@EXP.BasicDrv.LCD, 2015-04-17 add for 15069 ESD screen off automatically */
+#ifdef CONFIG_MACH_15109
+	if(!strcmp(panel_name,"oppo15069tm otm9605a 540p video video mode dsi panel")){
+	    lcd_dev = LCD_15069_TM_OTM9605A;
+		pr_err("oppo14017synaptics 720p cmd mode dsi panel\n");
+	}
+#endif
+
+
+
+#endif /*CONFIG_MACH_15109*/
+
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/06/11  Add for lcd type START */
+    if(!strcmp(panel_name,"oppo15009tm nt35592 720p video mode dsi panel")){
+		lcd_dev = LCD_15009_TM_NT35592;
+		pr_err("lcd_dev = oppo15009tm nt35592 720p video mode dsi panel\n");
+	}else if(!strcmp(panel_name, "oppo15009jdi nt35592 720p video video mode dsi panel")){
+		lcd_dev = LCD_15009_JDI_NT35592;
+		pr_err("lcd_dev = oppo15009jdi nt35592 720p video mode dsi panel\n");
+	}else if(!strcmp(panel_name,"oppo15037truly hx8389c 540p video mode dsi panel")){
+		lcd_dev = LCD_15037_TRULY_HX8389C;
+		pr_err("lcd_dev = oppo15037truly hx8389c 540p video mode dsi panel\n");
+	}else if(!strcmp(panel_name,"oppo15037tm otm9605a 540p video video mode dsi panel")){
+	    lcd_dev = LCD_15037_TM_OTM9605;
+		pr_err("lcd_dev = oppo15037tm otm9605a 540p video video mode dsi panel\n");
+	}else if(!strcmp(panel_name,"oppo15035tm otm9605a 540p video mode dsi panel")){
+	    lcd_dev = LCD_15035_TM_OTM9605;
+		pr_err("lcd_dev = LCD_15035_TM_OTM9605;\n");
+	}else if(!strcmp(panel_name,"oppo15035truly hx8389c 540p video mode dsi panel")){
+	    lcd_dev = LCD_15035_TRULY_HX8389C;
+		pr_err("lcd_dev = LCD_15035_TRULY_HX8389C;\n");
+	}else if(!strcmp(panel_name,"hx8394d 720p video mode dsi panel")){
+	    lcd_dev = LCD_15029_TRULY_HX8394;
+		pr_err("lcd_dev = LCD_15029_TRULY_HX8394;\n");
+	}else if(!strcmp(panel_name,"oppo15109truly hx8394f 720p video mode dsi panel")){ /*lile@EXP.BasicDrv.LCD, 2015-11-04, add for 15309 esd screen blackout*/
+	    lcd_dev = LCD_15109_TRULY_HX8394F;
+		pr_err("lcd_dev = LCD_15109_TRULY_HX8394F;\n");
+	}else if(!strcmp(panel_name,"oppo15109tm nt35592 720p video mode dsi panel")){
+	    lcd_dev = LCD_15109_TM_NT35592;
+		pr_err("lcd_dev = LCD_15109_TM_NT35592;\n");
+	}else if(!strcmp(panel_name,"oppo15109boe ili9881c 720p video mode dsi panel")){ /*lile@EXP.BasicDrv.LCD, 2016-01-29, add for 15309 Boe LCD*/
+	    lcd_dev = LCD_15109_BOE_ILI9881C;
+		pr_err("lcd_dev = LCD_15109_BOE_ILI9881C;\n");
+	}else{
+	    lcd_dev = LCD_UNKNOW;
+		pr_err("lcd_dev is unkowned\n");
+	}
+#endif /*CONFIG_MACH_15109*/
 	if (rc) {
 		pr_err("%s:%d panel dt parse failed\n", __func__, __LINE__);
 		return rc;
@@ -1876,6 +2836,78 @@ int mdss_dsi_panel_init(struct device_node *node,
 	pr_info("%s: Continuous splash %s\n", __func__,
 		pinfo->cont_splash_enabled ? "enabled" : "disabled");
 
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/04/03  Add for 15009 close cont splash in factory mode START */
+	if(is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035) || is_project(OPPO_15109)){
+	     if ((MSM_BOOT_MODE__FACTORY == get_boot_mode()) ||
+	   (MSM_BOOT_MODE__MOS == get_boot_mode())){
+	         pinfo->cont_splash_enabled = false;
+	     }
+	}
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/04/02  Add for 15009 ESD START */
+/*lile@EXP.BasicDrv.LCD, 2015-04-17 add for 15069 ESD screen off automatically */
+/* wuyu@EXP.BaseDrv.LCM, 2015-07-23, add TE check for 15070 */
+#ifdef CONFIG_MACH_15109
+		if(is_project(OPPO_15009)&&(lcd_dev == LCD_15009_JDI_NT35592)){
+			te_check_gpio = 914;
+			ESD_TE_TEST = 1;
+			pr_err("te_check_gpio LCD_15009_JDI_NT35592= %d \n",te_check_gpio);
+		}
+#endif /*CONFIG_MACH_15109*/
+#ifdef CONFIG_MACH_15109
+		if(is_project(OPPO_15037)){
+			te_check_gpio = 914;
+			ESD_TE_TEST = 1;
+		}
+#endif /*CONFIG_MACH_15109*/
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/01  Add for ESD */
+		if(is_project(OPPO_14005)){
+			te_check_gpio = 926;
+			ESD_TE_TEST = 1;
+		}
+		if((MSM_BOOT_MODE__FACTORY == get_boot_mode())&&(is_project(OPPO_15009)||is_project(OPPO_15037)||is_project(OPPO_15035)||is_project(OPPO_15109))){
+			ESD_TE_TEST = 0;
+		}
+
+		if(ESD_TE_TEST){
+			pr_err("te_check_gpio = %d \n",te_check_gpio);
+
+			init_completion(&te_comp);
+			 gpio_request(te_check_gpio,"te_check");
+			 gpio_direction_input(te_check_gpio);
+			irq = gpio_to_irq(te_check_gpio);
+			pr_err("te_check_gpio_irq = %d \n",irq);
+			rc = request_threaded_irq(irq, TE_irq_thread_fn, NULL,
+				IRQF_TRIGGER_RISING, "LCD_TE",NULL);
+
+			disable_irq(irq);
+			if (rc < 0) {
+				pr_err("Unable to register IRQ handler\n");
+				//return -ENODEV;
+				}
+			INIT_DELAYED_WORK(&techeck_work, techeck_work_func );
+			schedule_delayed_work(&techeck_work, msecs_to_jiffies(20000));
+
+			display_switch.name = "dispswitch";
+
+			rc = switch_dev_register(&display_switch);
+			if (rc)
+			{
+				pr_err("Unable to register display switch device\n");
+				//return rc;
+			}
+
+			/*dir: /sys/class/mdss_lcd/lcd_control*/
+			mdss_lcd = class_create(THIS_MODULE,"mdss_lcd");
+			mdss_lcd->dev_attrs = mdss_lcd_attrs;
+			device_create(mdss_lcd,dev_lcd,0,NULL,"lcd_control");
+			cont_splash_flag = pinfo->cont_splash_enabled;
+		}
+#endif /*CONFIG_MACH_15109*/
 	pinfo->dynamic_switch_pending = false;
 	pinfo->is_lpm_mode = false;
 	pinfo->esd_rdy = false;

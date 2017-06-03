@@ -282,6 +282,26 @@ enum {
 	DSI_CTRL_MAX,
 };
 
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/06/11  Add for LCD TYPE START */
+enum {
+	LCD_15009_JDI_NT35592=0,
+	LCD_15009_TM_NT35592,
+	LCD_15069_TM_OTM9605A,
+	LCD_15037_TM_OTM9605,
+	LCD_15035_TM_OTM9605,
+	LCD_15037_TRULY_HX8389C,
+	LCD_15035_TRULY_HX8389C,
+	LCD_15029_TRULY_HX8394,
+	LCD_15109_TM_NT35592,
+	LCD_15109_TRULY_HX8394F,
+	LCD_15109_BOE_ILI9881C,
+	LCD_16000_TM_OTM9605,
+	LCD_16000_TRULY_HX8389C,
+	LCD_UNKNOW,
+};
+#endif /*CONFIG_MACH_15109*/
+
 #define DSI_CTRL_LEFT		DSI_CTRL_0
 #define DSI_CTRL_RIGHT		DSI_CTRL_1
 #define DSI_CTRL_CLK_SLAVE	DSI_CTRL_RIGHT
@@ -354,6 +374,10 @@ struct mdss_dsi_ctrl_pdata {
 	bool panel_bias_vreg;
 	bool dsi_irq_line;
 	atomic_t te_irq_ready;
+#ifdef CONFIG_MACH_15109
+/* lile@EXP.BasicDrv.LCD, 2015-12-33, add for LCD 1.8v power supply change */
+	int lcd_en_gpio;
+#endif /*CONFIG_MACH_15109*/
 
 	bool cmd_clk_ln_recovery_en;
 	bool cmd_sync_wait_broadcast;
@@ -374,6 +398,15 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_panel_cmds post_dms_on_cmds;
 	struct dsi_panel_cmds post_panel_on_cmds;
 	struct dsi_panel_cmds off_cmds;
+
+#ifdef CONFIG_MACH_15109
+/* YongPeng.Yi@SWDP.MultiMedia, 2015/06/08  Add for 15009 cmd select START */
+	struct dsi_panel_cmds yellow_on_cmds;
+	struct dsi_panel_cmds normal_on_cmds;
+	struct dsi_panel_cmds balance_on_cmds;
+/* YongPeng.Yi@SWDP.MultiMedia END */
+#endif /*CONFIG_MACH_15109*/
+
 	struct dsi_panel_cmds status_cmds;
 	u32 status_cmds_rlen;
 	u32 status_value;
@@ -393,6 +426,10 @@ struct mdss_dsi_ctrl_pdata {
 	int mdp_busy;
 	struct mutex mutex;
 	struct mutex cmd_mutex;
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Add for display dump and stuck */
+	struct mutex cmdlist_mutex;
+#endif /*CONFIG_MACH_15109*/
 	struct mutex clk_lane_mutex;
 
 	u32 ulps_clamp_ctrl_off;
@@ -401,7 +438,10 @@ struct mdss_dsi_ctrl_pdata {
 	bool core_power;
 	bool mmss_clamp;
 	bool timing_db_mode;
-
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Add for display dump and stuck */
+	bool burst_mode_enabled;
+#endif /*CONFIG_MACH_15109*/
 	struct dsi_buf tx_buf;
 	struct dsi_buf rx_buf;
 	struct dsi_buf status_buf;

@@ -27,8 +27,12 @@
 #include "mdss_dsi.h"
 #include "mdss_panel.h"
 #include "mdss_debug.h"
-
 #define VSYNC_PERIOD 17
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/25  Add for crash when set brightness */
+#include <soc/oppo/oppo_project.h>
+#endif /*CONFIG_MACH_15109*/
+
 #define DMA_TX_TIMEOUT 200
 #define DMA_TPG_FIFO_LEN 64
 
@@ -109,6 +113,10 @@ void mdss_dsi_ctrl_init(struct device *ctrl_dev,
 	mutex_init(&ctrl->mutex);
 	mutex_init(&ctrl->cmd_mutex);
 	mutex_init(&ctrl->clk_lane_mutex);
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Add for display dump and stuck */
+	mutex_init(&ctrl->cmdlist_mutex);
+#endif /*CONFIG_MACH_15109*/
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->tx_buf, SZ_4K);
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->rx_buf, SZ_4K);
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->status_buf, SZ_4K);
@@ -486,15 +494,29 @@ static inline bool mdss_dsi_poll_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	u32 clk = 0;
 
+#ifndef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/27  Modify for splash screen */
 	if (readl_poll_timeout(((ctrl->ctrl_base) + 0x00a8),
 				clk,
 				(clk & 0x0010),
-				100, 20000)) {
+				10, 1000)) {
 		pr_err("%s: ndx=%d clk lane NOT stopped, clk=%x\n",
 					__func__, ctrl->ndx, clk);
 
 		return false;
 	}
+#else /*CONFIG_MACH_15109*/
+	if (readl_poll_timeout(((ctrl->ctrl_base) + 0x00a8),
+				clk,
+				(clk & 0x0010),
+				200, 20000)) {
+		pr_err("%s: ndx=%d clk lane NOT stopped, clk=%x\n",
+					__func__, ctrl->ndx, clk);
+
+		return false;
+	}
+
+#endif /*CONFIG_MACH_15109*/
 	return true;
 }
 
@@ -508,10 +530,17 @@ static void mdss_dsi_wait_clk_lane_to_stop(struct mdss_dsi_ctrl_pdata *ctrl)
 	/* force clk lane tx stop -- bit 20 */
 	mdss_dsi_cfg_lane_ctrl(ctrl, BIT(20), 1);
 
+#ifndef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/05/20  Modify for error log too much goto dump */
+	if (mdss_dsi_poll_clk_lane(ctrl) == false)
+		pr_err("%s: clk lane recovery failed\n", __func__);
+#else /*CONFIG_MACH_15109*/
 	if (mdss_dsi_poll_clk_lane(ctrl) == false)
 		pr_err("%s: clk lane recovery failed\n", __func__);
 	else
 		ctrl->clk_lane_cnt = 0;
+#endif /*CONFIG_MACH_15109*/
+
 	/* clear clk lane tx stop -- bit 20 */
 	mdss_dsi_cfg_lane_ctrl(ctrl, BIT(20), 0);
 }
@@ -529,8 +558,11 @@ static void mdss_dsi_start_hs_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
 	mdss_dsi_stop_hs_clk_lane(ctrl);
 
 	mutex_lock(&ctrl->clk_lane_mutex);
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/27  Add for splash screen */
 	MDSS_XLOG(ctrl->ndx, ctrl->clk_lane_cnt, current->pid,
-			XLOG_FUNC_ENTRY);
+		XLOG_FUNC_ENTRY);
+#endif /*CONFIG_MACH_15109*/
 	mdss_dsi_clk_ctrl(ctrl, DSI_ALL_CLKS, 1);
 	if (ctrl->clk_lane_cnt) {
 		pr_err("%s: ndx=%d do-wait, cnt=%d\n",
@@ -544,8 +576,11 @@ static void mdss_dsi_start_hs_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
 	pr_debug("%s: ndx=%d, set_hs, cnt=%d\n", __func__,
 				ctrl->ndx, ctrl->clk_lane_cnt);
 	mdss_dsi_clk_ctrl(ctrl, DSI_ALL_CLKS, 0);
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/27  Add for splash screen */
 	MDSS_XLOG(ctrl->ndx, ctrl->clk_lane_cnt,
 			current->pid, XLOG_FUNC_EXIT);
+#endif /*CONFIG_MACH_15109*/
 	mutex_unlock(&ctrl->clk_lane_mutex);
 }
 
@@ -558,6 +593,51 @@ static void mdss_dsi_start_hs_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
  * had been started. Therefore more than 1 vsync polling time is needed.
  * Use 50ms timeout to cover 30 FPS case.
  */
+#ifndef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Modify for display dump and stuck */
+static void mdss_dsi_stop_hs_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
+{
+	u32 fifo = 0;
+	u32 lane = 0;
+
+	mutex_lock(&ctrl->clk_lane_mutex);
+	if (ctrl->clk_lane_cnt == 0)	/* stopped already */
+		goto release;
+
+	mdss_dsi_clk_ctrl(ctrl, DSI_ALL_CLKS, 1);
+	/* fifo */
+	if (readl_poll_timeout(((ctrl->ctrl_base) + 0x000c),
+			   fifo,
+			   ((fifo & 0x11110000) == 0x11110000),
+			       10, 1000)) {
+		pr_err("%s: fifo NOT empty, fifo=%x\n",
+					__func__, fifo);
+		goto end;
+	}
+
+	/* data lane status */
+	if (readl_poll_timeout(((ctrl->ctrl_base) + 0x00a8),
+			   lane,
+			   ((lane & 0x000f) == 0x000f),
+			       100, 2000)) {
+		pr_err("%s: datalane NOT stopped, lane=%x\n",
+					__func__, lane);
+	}
+end:
+	/* stop force clk lane hs */
+	mdss_dsi_cfg_lane_ctrl(ctrl, BIT(28), 0);
+
+	mdss_dsi_wait_clk_lane_to_stop(ctrl);
+
+	ctrl->clk_lane_cnt = 0;
+	mdss_dsi_clk_ctrl(ctrl, DSI_ALL_CLKS, 0);
+release:
+	pr_debug("%s: ndx=%d, cnt=%d\n", __func__,
+			ctrl->ndx, ctrl->clk_lane_cnt);
+
+	mutex_unlock(&ctrl->clk_lane_mutex);
+}
+#else /*CONFIG_MACH_15109*/
 static void mdss_dsi_stop_hs_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	u32 fifo = 0;
@@ -604,6 +684,7 @@ release:
 			current->pid, XLOG_FUNC_EXIT);
 	mutex_unlock(&ctrl->clk_lane_mutex);
 }
+#endif /*CONFIG_MACH_15109*/
 
 static void mdss_dsi_cmd_start_hs_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
 {
@@ -630,11 +711,22 @@ static void mdss_dsi_cmd_stop_hs_clk_lane(struct mdss_dsi_ctrl_pdata *ctrl)
 			return;
 		mctrl = mdss_dsi_get_other_ctrl(ctrl);
 
+#ifndef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Modify for display dump and stuck */
+		if (mctrl)
+			mdss_dsi_stop_hs_clk_lane(mctrl, DSI_CMD_TERM);
+#else /*CONFIG_MACH_15109*/
 		if (mctrl)
 			mdss_dsi_stop_hs_clk_lane(mctrl);
+#endif /*CONFIG_MACH_15109*/
 	}
 
+#ifndef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Modify for display dump and stuck */
+	mdss_dsi_stop_hs_clk_lane(ctrl, DSI_CMD_TERM);
+#else /*CONFIG_MACH_15109*/
 	mdss_dsi_stop_hs_clk_lane(ctrl);
+#endif /*CONFIG_MACH_15109*/
 }
 
 static void mdss_dsi_ctl_phy_reset(struct mdss_dsi_ctrl_pdata *ctrl, u32 event)
@@ -988,6 +1080,10 @@ static int mdss_dsi_read_status(struct mdss_dsi_ctrl_pdata *ctrl)
  * Return: positive value if the panel is in good state, negative value or
  * zero otherwise.
  */
+ #ifdef CONFIG_MACH_15109
+//lile@EXP.BasicDrv.LCD, 2016-01-04, add reset cmds for Tianma HD LCD ESD blurred
+	extern int lcd_dev;
+#endif
 int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	int ret = 0;
@@ -1017,6 +1113,19 @@ int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	if (ret > 0) {
 		ret = ctrl_pdata->check_read_status(ctrl_pdata);
 	} else {
+#ifdef CONFIG_MACH_15109
+//lile@EXP.BasicDrv.LCD, 2016-01-04, add reset cmds for Tianma HD LCD ESD blurred
+		if(is_project(OPPO_15109)&&(lcd_dev == LCD_15109_TM_NT35592)){
+			ctrl_pdata->check_read_status(ctrl_pdata);
+			ret = -EINVAL;
+		}
+#endif /*CONFIG_MACH_15109*/
+#ifdef CONFIG_MACH_15109
+//lile@EXP.BasicDrv.LCD, 2015-12-17, lile add for esd
+		if (is_project(OPPO_15035) && (lcd_dev == LCD_15035_TM_OTM9605)){
+			ret = ctrl_pdata->check_read_status(ctrl_pdata);
+		}
+#endif
 		pr_err("%s: Read status register returned error\n", __func__);
 	}
 
@@ -1036,7 +1145,12 @@ static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
 	u32 ystride, bpp, dst_bpp;
 	u32 stream_ctrl, stream_total;
 	u32 dummy_xres = 0, dummy_yres = 0;
+#ifndef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Modify for display dump and stuck */
 	u32 hsync_period, vsync_period;
+#else /*CONFIG_MACH_15109*/
+	u32 hsync_period, vsync_period, reg = 0;
+#endif /*CONFIG_MACH_15109*/
 
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
@@ -1109,6 +1223,16 @@ static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
 					DTYPE_DCS_LWRITE;
 			stream_total = height << 16 | width;
 		}
+#ifdef CONFIG_MACH_15109
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2015/06/05  Modify for display dump and stuck */
+		/* Enable frame transfer in burst mode */
+		if (ctrl_pdata->hw_rev >= MDSS_DSI_HW_REV_103) {
+			reg = MIPI_INP(ctrl_pdata->ctrl_base + 0x1b8);
+			reg = reg | BIT(16);
+			MIPI_OUTP((ctrl_pdata->ctrl_base + 0x1b8), reg);
+			ctrl_pdata->burst_mode_enabled = 1;
+		}
+#endif /*CONFIG_MACH_15109*/
 
 		/* DSI_COMMAND_MODE_MDP_STREAM_CTRL */
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x60, stream_ctrl);
